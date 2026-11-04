@@ -93,7 +93,7 @@ if(GRID_MODE)for(const [x0,x1,z0,z1] of RESERVED){const [i0,j0]=cellIndex(x0,z0)
 // The avenue's poplars take the cells beside the landing road before anything else can.
 const avenueSpots=[];
 if(GRID_MODE){const cells=gridCells(routes[0],GRID_ORIGIN,CELL);for(let k=1;k<cells.length-1;k++){const [i,j]=cells[k],[pi,pj]=cells[k-1],z=cellCentre(i,j)[1];if(z>25||z<4||k%2)continue;const di=i-pi,dj=j-pj;for(const side of [-1,1]){const a=i-dj*side,b=j+di*side,key=a+','+b;const [x,zz]=cellCentre(a,b);if(!roadCells.has(key)&&!claimedCells.has(key)&&walkable(x,zz)){claimedCells.add(key);avenueSpots.push([x,zz]);}}}}
-else{const [a,b,c]=routes[0];for(const [[ax,az],[bx,bz]] of [[a,b],[b,c]]){const len=Math.hypot(bx-ax,bz-az);for(let t=2.2;t<len;t+=4.5){const x=ax+(bx-ax)*t/len,z=az+(bz-az)*t/len;if(z>25||z<4)continue;for(const side of [-1,1])avenueSpots.push([x-(bz-az)/len*3.4*side,z+(bx-ax)/len*3.4*side]);}}}
+// Free walking (?grid=0) keeps the original open landing road: the avenue is a grid-mode piece only.
 const path=travelRoutes[0];
 const tintBlend=(a,b,t)=>a.map((v,i)=>v+(b[i]-v)*t);
 function terrainColor(x,z){
