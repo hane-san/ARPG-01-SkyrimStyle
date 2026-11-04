@@ -5,7 +5,7 @@
   "type": "module",
   "description": "A quiet first person island exploration prototype",
   "scripts": {
-    "check": "node scripts/sync-display-name.mjs --check && node --check dist/island.js && node --check dist/movement.js && node --check dist/journey.js && node --check dist/grid.js && node --test tests/*.test.js",
+    "check": "node scripts/sync-display-name.mjs --check && node --check dist/island.js && node --check dist/movement.js && node --check dist/journey.js && node --check dist/grid.js && node --check dist/regions.js && node --check dist/music.js && node --test tests/*.test.js",
     "dev": "python3 -m http.server 4173 --directory dist",
     "build": "node scripts/build.mjs",
     "sync:display-name": "npm run build"

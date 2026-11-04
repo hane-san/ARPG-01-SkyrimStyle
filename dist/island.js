@@ -1,6 +1,8 @@
 const {height,walkable,clamp,smooth,routes,landmarks,distanceToRoute,WORLD_BOUNDS,monuments,expeditionRoute,valleyRoute,easternRoute,saltRoute,MOON_DIRECTION}=await import('./terrain.js'+new URL(import.meta.url).search);
 const {CRUISE_SPEED,footStride,nearPlaneMargin,CollisionWorld,circleCollider,boxCollider,GestureInput,createMotionState,resetMotion,stepMotion,readMovementInput}=await import('./movement.js'+new URL(import.meta.url).search);
 const {journeyScenes,landscapeColor,readingSeconds,JourneyNotices}=await import('./journey.js'+new URL(import.meta.url).search);
+const {REGIONS,SHORE_REGION,RegionTracker}=await import('./regions.js'+new URL(import.meta.url).search);
+const {RegionMusic}=await import('./music.js'+new URL(import.meta.url).search);
 const {CELL,GRID_ORIGIN,STEP_SECONDS,QUICK_STEP_SECONDS,HEADING_NAMES,GridWalker,GridGesture,keyCommand,automapCells,gridRoute,gridCells}=await import('./grid.js'+new URL(import.meta.url).search);
 // Dungeon-crawler travel is the default (producer decision 2026-11-04): the same island, one grid cell at a time.
 // ?grid=0 keeps the earlier free walking for comparison and its regression checks.
@@ -9,16 +11,16 @@ const canvas=document.querySelector('#world'),gl=canvas.getContext('webgl',{anti
 if(!gl){document.querySelector('#error').hidden=false;document.querySelector('#begin').disabled=true;throw Error('WebGL unavailable');}
 const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
 const vs=`attribute vec3 aP,aN,aC;uniform mat4 uVP;uniform vec3 uOffset,uEye;uniform float uYaw,uRoll,uTime,uWater;varying vec3 vC,vN,vP;varying float vD;void main(){float c=cos(uYaw),s=sin(uYaw),cr=cos(uRoll),sr=sin(uRoll);mat3 r=mat3(c,0.,-s,0.,1.,0.,s,0.,c)*mat3(cr,sr,0.,-sr,cr,0.,0.,0.,1.);vec3 p=r*aP+uOffset;if(uWater>.5)p.y+=.055*sin(p.x*.35+uTime*.45)+.04*cos(p.z*.46-uTime*.38);vP=p;vN=r*aN;vC=aC;vD=length(p-uEye);gl_Position=uVP*vec4(p,1.);}`;
-const fs=`precision highp float;varying vec3 vC,vN,vP;varying float vD;uniform float uTime,uWater;void main(){float light=.71+.29*abs(dot(normalize(vN),normalize(vec3(-.4,.85,.3))));vec3 col=vC*light;if(uWater>.5){float wave=sin(vP.x*.64+vP.z*.75+uTime*.5)*sin(vP.z*.43-uTime*.36);col+=smoothstep(.65,1.,wave)*.015;float gleam=pow(max(0.,sin(vP.x*.1+vP.z*.23)),28.)*.012;col+=gleam;}float fog=1.-exp(-vD*.00135);fog=clamp(fog,0.,.97);col=mix(col,vec3(.77,.824,.815),fog);gl_FragColor=vec4(col,1.);}`;
+const fs=`precision highp float;varying vec3 vC,vN,vP;varying float vD;uniform float uTime,uWater,uFogScale;uniform vec3 uFog;void main(){float light=.71+.29*abs(dot(normalize(vN),normalize(vec3(-.4,.85,.3))));vec3 col=vC*light;if(uWater>.5){float wave=sin(vP.x*.64+vP.z*.75+uTime*.5)*sin(vP.z*.43-uTime*.36);col+=smoothstep(.65,1.,wave)*.015;float gleam=pow(max(0.,sin(vP.x*.1+vP.z*.23)),28.)*.012;col+=gleam;}float fog=1.-exp(-vD*.00135*uFogScale);fog=clamp(fog,0.,.97);col=mix(col,uFog,fog);gl_FragColor=vec4(col,1.);}`;
 function shader(type,source){const sh=gl.createShader(type);gl.shaderSource(sh,source);gl.compileShader(sh);if(!gl.getShaderParameter(sh,gl.COMPILE_STATUS))throw Error(gl.getShaderInfoLog(sh));return sh;}
 function program(v,f){const p=gl.createProgram();gl.attachShader(p,shader(gl.VERTEX_SHADER,v));gl.attachShader(p,shader(gl.FRAGMENT_SHADER,f));gl.linkProgram(p);if(!gl.getProgramParameter(p,gl.LINK_STATUS))throw Error(gl.getProgramInfoLog(p));return p;}
-const prog=program(vs,fs),loc={};for(const n of ['uVP','uOffset','uEye','uYaw','uRoll','uTime','uWater'])loc[n]=gl.getUniformLocation(prog,n);
+const prog=program(vs,fs),loc={};for(const n of ['uVP','uOffset','uEye','uYaw','uRoll','uTime','uWater','uFog','uFogScale'])loc[n]=gl.getUniformLocation(prog,n);
 const attrs=['aP','aN','aC'].map(n=>gl.getAttribLocation(prog,n));
-const skyProg=program(`attribute vec2 a;varying vec2 v;void main(){v=a*.5+.5;gl_Position=vec4(a,.9999,1.);}`,`precision highp float;varying vec2 v;uniform float yaw,aspect,tanHalfFov;uniform vec3 moonDirection;
+const skyProg=program(`attribute vec2 a;varying vec2 v;void main(){v=a*.5+.5;gl_Position=vec4(a,.9999,1.);}`,`precision highp float;varying vec2 v;uniform float yaw,aspect,tanHalfFov;uniform vec3 moonDirection,skyLow,skyHigh;
 void main(){
  vec3 cameraRay=normalize(vec3((v.x*2.-1.)*aspect*tanHalfFov,(v.y*2.-1.)*tanHalfFov,-1.));
  float c=cos(yaw),s=sin(yaw);vec3 ray=normalize(vec3(c*cameraRay.x+s*cameraRay.z,cameraRay.y,-s*cameraRay.x+c*cameraRay.z));
- vec3 col=mix(vec3(.77,.824,.815),vec3(.663,.758,.785),smoothstep(0.,.8,ray.y));
+ vec3 col=mix(skyLow,skyHigh,smoothstep(0.,.8,ray.y));
  float alignment=clamp(dot(ray,moonDirection),-1.,1.);
  float disc=smoothstep(.9999568,.9999639,alignment);
  float marks=.018*sin(dot(ray,vec3(160.,90.,40.)))*sin(dot(ray,vec3(30.,120.,170.)));
@@ -26,7 +28,7 @@ void main(){
  col+=vec3(.012,.01,.004)*exp(-max(0.,1.-alignment)*1800.);
  gl_FragColor=vec4(col,1.);
 }`);
-const skyLoc=Object.fromEntries(['yaw','aspect','tanHalfFov','moonDirection'].map(n=>[n,gl.getUniformLocation(skyProg,n)]));
+const skyLoc=Object.fromEntries(['yaw','aspect','tanHalfFov','moonDirection','skyLow','skyHigh'].map(n=>[n,gl.getUniformLocation(skyProg,n)]));
 const skyBuf=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,skyBuf);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,3,-1,-1,3]),gl.STATIC_DRAW);
 let seed=12815;function random(){seed=(1664525*seed+1013904223)>>>0;return seed/4294967296;}const rnd=(a,b)=>a+(b-a)*random();
 const hex=s=>{const n=parseInt(s.replace('#',''),16);return[n>>16&255,n>>8&255,n&255].map(x=>x/255)};
@@ -84,6 +86,14 @@ function gridProp(place,blocks=()=>true,search=false){
  return (x,z,...rest)=>{if(!blocks(...rest))return place(x,z,...rest);const c=claimCell(x,z,search);return c?place(c[0],c[1],...rest):undefined;};
 }
 const [tx,tz]=gatewayCell(23,8),[sx,sz]=gatewayCell(-4,-13);
+// Issue #21 set pieces own these rectangles (x0,x1,z0,z1): no random tree or rock grows inside them in either mode.
+const RESERVED=[[-26.5,-11.5,0,10.5],[10,23,-25,-4],[-26,-16,-27,-12],[-12.5,-7.5,-76,-71]];
+const reserved=(x,z)=>RESERVED.some(([x0,x1,z0,z1])=>x>=x0&&x<=x1&&z>=z0&&z<=z1);
+if(GRID_MODE)for(const [x0,x1,z0,z1] of RESERVED){const [i0,j0]=cellIndex(x0,z0),[i1,j1]=cellIndex(x1,z1);for(let j=j0;j<=j1;j++)for(let i=i0;i<=i1;i++){const [x,z]=cellCentre(i,j);if(reserved(x,z))claimedCells.add(i+','+j);}}
+// The avenue's poplars take the cells beside the landing road before anything else can.
+const avenueSpots=[];
+if(GRID_MODE){const cells=gridCells(routes[0],GRID_ORIGIN,CELL);for(let k=1;k<cells.length-1;k++){const [i,j]=cells[k],[pi,pj]=cells[k-1],z=cellCentre(i,j)[1];if(z>25||z<4||k%2)continue;const di=i-pi,dj=j-pj;for(const side of [-1,1]){const a=i-dj*side,b=j+di*side,key=a+','+b;const [x,zz]=cellCentre(a,b);if(!roadCells.has(key)&&!claimedCells.has(key)&&walkable(x,zz)){claimedCells.add(key);avenueSpots.push([x,zz]);}}}}
+else{const [a,b,c]=routes[0];for(const [[ax,az],[bx,bz]] of [[a,b],[b,c]]){const len=Math.hypot(bx-ax,bz-az);for(let t=2.2;t<len;t+=4.5){const x=ax+(bx-ax)*t/len,z=az+(bz-az)*t/len;if(z>25||z<4)continue;for(const side of [-1,1])avenueSpots.push([x-(bz-az)/len*3.4*side,z+(bx-ax)/len*3.4*side]);}}}
 const path=travelRoutes[0];
 const tintBlend=(a,b,t)=>a.map((v,i)=>v+(b[i]-v)*t);
 function terrainColor(x,z){
@@ -152,6 +162,13 @@ const terrain={count:terrainChunks.reduce((n,b)=>n+b.count,0)};
 // Low islands soften the horizon around the miniature inland sea.
 for(let i=0;i<19;i++){const a=i/19*Math.PI*2,r=rnd(1650,2300);sphere(Math.cos(a)*r,-8,Math.sin(a)*r,rnd(90,240),rnd(25,80),rnd(70,180),hex(i%2?'aebfba':'b5c4be'),12,5);}
 const distant=batch();
+// Issue #21: a snow ridge far beyond the northern sea, with a nearer blue range. Real world-space geometry:
+// it turns out of view and returns to the same place, and the islands in front of it pass across it.
+for(const [x,z,h,r] of [[-1100,-2150,300,330],[-820,-2280,420,380],[-560,-2200,360,300],[-300,-2320,470,360],[-40,-2240,400,320],[220,-2300,450,350],[480,-2190,330,280],[760,-2280,410,360],[1020,-2200,300,300]]){
+ cone(x,-6,z,r,0,h,hex('a9b6c3'),10);cone(x,h*.6-6,z,r*.41,0,h*.4+.6,hex('eef1f1'),10);
+}
+for(const [x,z,h,r] of [[-700,-1750,150,260],[-380,-1820,190,280],[-60,-1760,160,240],[260,-1800,200,300],[600,-1740,140,250]])cone(x,-6,z,r,0,h,hex('9db0bd'),9);
+const mountains=batch();
 const obstacles=[],steppingStones=[];
 // Walls large enough to press a face against use their drawn eye-level footprint plus this margin, so the 0.18 m
 // near plane never enters the model, even looking along a wall in landscape (aspect up to 2.4). About 0.11 m.
@@ -160,18 +177,18 @@ const addCircle=(x,z,r,kind='solid')=>obstacles.push(circleCollider(x,z,r,kind))
 const addBox=(x,z,hx,hz,kind='solid')=>obstacles.push(boxCollider(x,z,hx,hz,kind));
 function rock(x,z,s){let y=height(x,z);sphere(x,y+s*.23,z,s,s*.55,s*.72,pal.stone,7,4);if(s>.7&&y>.3)addCircle(x,z,s*.6);}
 rock=gridProp(rock,s=>s>.7);
-for(let i=0;i<85;i++){let a=rnd(0,Math.PI*2),r=rnd(.82,1.07),x=Math.cos(a)*35*r,z=Math.sin(a)*39*r;if(height(x,z)>-.4&&routeDistance(x,z)>2.8)rock(x,z,rnd(.3,1.2));}
+for(let i=0;i<85;i++){let a=rnd(0,Math.PI*2),r=rnd(.82,1.07),x=Math.cos(a)*35*r,z=Math.sin(a)*39*r;if(height(x,z)>-.4&&routeDistance(x,z)>2.8&&!reserved(x,z))rock(x,z,rnd(.3,1.2));}
 // A few worn stepping stones lead inland.
 for(let i=0;i<22;i++){const t=i/21,j=Math.floor(t*(path.length-1)),u=t*(path.length-1)-j;const a=path[Math.min(j,path.length-2)],b=path[Math.min(j+1,path.length-1)],x=a[0]*(1-u)+b[0]*u+rnd(-.5,.5),z=a[1]*(1-u)+b[1]*u; sphere(x,height(x,z)+.025,z,.36,.065,.25,hex('bdbfb0'),7,3);steppingStones.push([x,z]);}
 function olive(x,z,s=1){const y=height(x,z);branch([x,y,z],[x+.12*s,y+2.15*s,z],.12*s,pal.bark);for(let i=0;i<4;i++){const a=i*2.4,dx=Math.cos(a)*.7*s,dz=Math.sin(a)*.65*s;branch([x,y+1.1*s,z],[x+dx,y+2.5*s,z+dz],.06*s,pal.bark);sphere(x+dx,y+2.6*s,z+dz,.85*s,.5*s,.72*s,i%2?pal.olive:hex('a8b7a1'),9,5);}addCircle(x,z,.1*s,'tree');}
 olive=gridProp(olive);
-for(let i=0;i<64;i++){const x=rnd(-29,29),z=rnd(-30,27);if(height(x,z)<1.2||routeDistance(x,z)<3||Math.hypot(x+4,z+12)<6||Math.hypot(x-23,z-8)<4)continue;olive(x,z,rnd(.8,1.25));}
+for(let i=0;i<64;i++){const x=rnd(-29,29),z=rnd(-30,27);if(height(x,z)<1.2||routeDistance(x,z)<3||reserved(x,z)||Math.hypot(x+4,z+12)<6||Math.hypot(x-23,z-8)<4)continue;olive(x,z,rnd(.8,1.25));}
 // Surreal plants: striped umbrella fungi and curled sea ferns.
 function mushroom(x,z,s,hue=0){const y=height(x,z),c=[pal.purple,pal.pink,pal.blue][hue];cone(x,y,z,.1*s,.15*s,1.65*s,pal.cream,8);sphere(x,y+1.65*s,z,.9*s,.37*s,.9*s,c,18,6);for(let j=0;j<3;j++)torus(x,y+(1.68+j*.09)*s,z,(.78-j*.19)*s,.025*s,j%2?pal.cream:pal.pink);for(let i=0;i<5;i++){const a=i*1.26;sphere(x+Math.cos(a)*.44*s,y+1.94*s,z+Math.sin(a)*.44*s,.07*s,.025*s,.07*s,pal.cream,5,3);}addCircle(x,z,.12*s,'plant');}
 mushroom=gridProp(mushroom);
 function fern(x,z,s){const y=height(x,z);for(let i=0;i<4;i++){const a=i*1.5,dx=Math.cos(a),dz=Math.sin(a);let p=[x,y,z];for(let j=1;j<=8;j++){const t=j/8,b=[x+dx*Math.sin(t*2.6)*.8*s,y+t*2.1*s,z+dz*Math.sin(t*2.6)*.8*s];branch(p,b,.035*s,j%2?pal.purple:pal.pink);if(j>2&&j<7)sphere(b[0]+dz*.18*s,b[1],b[2]-dx*.18*s,.21*s,.07*s,.11*s,j%2?pal.blue:pal.pink,6,3);p=b;}sphere(p[0],p[1],p[2],.13*s,.14*s,.13*s,pal.cream,7,4);}}
-for(const [x,z,s,c] of [[-4,24,1.25,0],[-6,23,.65,1],[-3,22,.7,2],[15,21,1.45,1],[17,19,.75,0],[19,22,.5,2],[-14,6,1.6,0],[-16,7,.9,2],[-13,8,.6,1],[9,-4,1.1,0],[10,-7,.65,1],[-24,-10,1.4,2],[-46,22,1.2,1]])mushroom(x,z,s,c);
-for(let i=0;i<34;i++){const x=rnd(-28,28),z=rnd(-29,30);if(height(x,z)>1&&routeDistance(x,z)>2.4)fern(x,z,rnd(.45,.9));}
+for(const [x,z,s,c] of [[-4,24,1.25,0],[-6,23,.65,1],[-3,22,.7,2],[15,21,1.45,1],[17,19,.75,0],[19,22,.5,2],[-14,6,1.6,0],[-16,7,.9,2],[-13,8,.6,1],[9,-4,1.1,0],[10,-7,.65,1],[-24,-10,1.4,2],[-46,22,1.2,1]])if(!reserved(x,z))mushroom(x,z,s,c);
+for(let i=0;i<34;i++){const x=rnd(-28,28),z=rnd(-29,30);if(height(x,z)>1&&routeDistance(x,z)>2.4&&!reserved(x,z))fern(x,z,rnd(.45,.9));}
 // Tiny pastel grass, flowers, and salt-worn pebbles.
 for(let i=0;i<600;i++){const x=rnd(-34,34),z=rnd(-38,38),y=height(x,z);if(y<1||routeDistance(x,z)<2)continue;const s=rnd(.12,.35),c=i%5===0?pal.pink:hex('a0b393');tri([x-.09,y,z],[x,y+s,z],[x+.09,y,z],c);tri([x,y,z-.09],[x,y+s,z],[x,y,z+.09],c);if(i%11===0)sphere(x,y+s,z,.07,.06,.07,pal.cream,5,3);}
 // Torii, with a subdued vermilion pigment washed by sea air.
@@ -248,6 +265,7 @@ function shoreHouse(x,z,w=6){
  // Walls span z -0.4w..0.4w; the door and window frames stand up to 0.41w+0.04 on the front face.
  addBox(x,z+w*.005+.02,w*.5+WALL_MARGIN,w*.405+.02+WALL_MARGIN,'house');
 }
+const rawShoreHouse=shoreHouse;
 shoreHouse=gridProp(shoreHouse,undefined,true);
 // Widely spaced signposts each take their own one-metre culling circle; a shared distant centre hid posts in plain view.
 for(const [x,z] of [[-20,-145],[-2,-192],[-109,-224],[-245,-273],[-270,-416],[-223,-489],[-127,-559],[-111,-675],[-69,-777],[9,-815],[217,-632],[302,-510],[279,-391],[166,-291],[64,-222]])if(routeDistance(x,z)>3.5){signpost(x,z);sceneryBatch(x,z,1);}
@@ -485,6 +503,123 @@ for(const scene of scenes){
  sceneryBatch(x,z,18);
 }
 
+// Issue #21 set pieces, packed into the small first island. They use their own seeded random stream, so the
+// older seeded layout (plants, verges, islanders) keeps every position. Each piece is its own culled batch.
+let vignetteSeed=40213;const vrnd=(a,b)=>{vignetteSeed=(1664525*vignetteSeed+1013904223)>>>0;return a+(b-a)*vignetteSeed/4294967296;};
+const spot=(x,z)=>GRID_MODE?claimCell(x,z,true):[x,z];
+const flatDisc=(x,z,r,lift,col,sides=10)=>{for(let k=0;k<sides;k++){const a=k/sides*Math.PI*2,b=(k+1)/sides*Math.PI*2,p=(t)=>[x+Math.cos(t)*r,height(x+Math.cos(t)*r,z+Math.sin(t)*r)+lift,z+Math.sin(t)*r];tri([x,height(x,z)+lift,z],p(a),p(b),col);}};
+// 1. The avenue beyond: slender poplars frame the landing road and lead the eye to the bright distance.
+for(const [x,z] of avenueSpots){const y=height(x,z);branch([x,y,z],[x,y+3.4,z],.13,pal.bark);sphere(x,y+4.4,z,.95,2.7,.95,hex('8ea58c'),8,5);sphere(x+.2,y+5.6,z-.1,.6,1.4,.6,hex('9db39a'),7,4);addCircle(x,z,.14,'tree');}
+sceneryBatch(3,14,16);
+// 2. The glass house: an open white frame with glass glints, geometric beds, a basin and a gravel aisle.
+{
+ const x0=-25.75,x1=-12.25,z0=.75,z1=9.75,zm=5.25,y=height(-19,zm),wall=3.2,ridge=5.3,frame=hex('eef0e6'),glint=hex('d9e9e6');
+ const post=(x,z)=>{branch([x,height(x,z)-.1,z],[x,y+wall,z],.07,frame);addCircle(x,z,.07,'greenhouse-post');};
+ for(const x of [x0,-21.25,-16.75,x1])for(const z of [z0,z1])post(x,z);
+ for(const x of [x0,x1])post(x,zm);
+ for(const z of [z0,z1])branch([x0,y+wall,z],[x1,y+wall,z],.06,frame);
+ for(const x of [x0,x1])branch([x,y+wall,z0],[x,y+wall,z1],.06,frame);
+ branch([x0,y+ridge,zm],[x1,y+ridge,zm],.06,frame);
+ for(const x of [x0,-21.25,-16.75,x1])for(const z of [z0,z1])branch([x,y+wall,z],[x,y+ridge,zm],.05,frame);
+ for(let x=x0+.7;x<x1-.5;x+=1.5)for(const z of [z0,z1])quad([x,y+wall+.02,z],[x+.22,y+wall+.02,z],[x+.22,y+ridge,zm],[x,y+ridge,zm],glint);
+ // Low glazed sills along both long sides: the house is entered from either gable end.
+ for(const z of [z0,z1]){box(-19,height(-19,z)-.2,z,13.5,.75,.22,hex('d4d6c8'));addBox(-19,z,6.75,.11,'greenhouse-sill');}
+ for(let x=x0+.4;x<x1;x+=.9)for(const z of [z0,z1])branch([x,height(x,z)+.5,z],[x,y+wall,z],.015,glint);
+ // Gravel aisle along the open row.
+ for(let x=x0;x<x1;x+=1.5)quad([x,height(x,1.8)+.03,1.8],[x,height(x,4.2)+.03,4.2],[x+1.5,height(x+1.5,4.2)+.03,4.2],[x+1.5,height(x+1.5,1.8)+.03,1.8],hex((x*2|0)%2?'ddd5c3':'d6cfbe'));
+ // Geometric beds and a still basin take the far row.
+ for(const bx of [-23.5,-14.5]){const by=height(bx,7.5);box(bx,by-.1,7.5,3.1,.55,3.1,hex('a99f88'));for(let i=0;i<4;i++)for(let j=0;j<4;j++){const fx=bx-1.15+i*.76,fz=6.35+j*.76,c=[pal.pink,pal.purple,pal.cream,pal.blue][(i+j)%4];branch([fx,by+.45,fz],[fx,by+.95,fz],.02,pal.olive);sphere(fx,by+1,fz,.2,.14,.2,c,6,3);}addBox(bx,7.5,1.55,1.55,'greenhouse-bed');}
+ {const by=height(-19,7.5);box(-19,by-.1,7.5,3,.6,3,pal.stone);quad([-20.3,by+.52,6.2],[-17.7,by+.52,6.2],[-17.7,by+.52,8.8],[-20.3,by+.52,8.8],hex('acd0d2'));cone(-19,by+.5,7.5,.18,.1,1.1,pal.cream,7);sphere(-19,by+1.6,7.5,.32,.2,.32,pal.cream,8,4);addCircle(-19,7.5,1.5,'greenhouse-basin');}
+ // Hanging pots along the aisle.
+ for(let x=x0+2.2;x<x1;x+=2.25){branch([x,y+wall,3],[x,y+wall-.9,3],.012,pal.bark);sphere(x,y+wall-1.05,3,.24,.2,.24,pal.olive,7,4);}
+ sceneryBatch(-19,zm,10);
+}
+// 3. The sky hamlet: small houses, a laundry line, a little glass pyramid, an outdoor table and islands afloat.
+{
+ rawShoreHouse(17,-15,4.2);rawShoreHouse(21.5,-10.5,3.6);
+ {const y=height(12.5,-19.5);for(const dx of [-1.9,1.9]){branch([12.5+dx,height(12.5+dx,-19.5),-19.5],[12.5+dx,y+2.4,-19.5],.05,pal.bark);addCircle(12.5+dx,-19.5,.06,'laundry-post');}
+  branch([10.6,y+2.3,-19.5],[14.4,y+2.3,-19.5],.012,pal.bark);
+  for(let i=0;i<3;i++){const x=10.9+i*1.2;quad([x,y+2.28,-19.5],[x+.9,y+2.28,-19.5],[x+.85,y+1.2,-19.42],[x+.05,y+1.25,-19.45],[pal.cream,pal.pink,pal.blue][i]);}}
+ {const x=21.5,z=-19.5,y=height(x,z),apex=[x,y+3.6,z],c=[[-1.7,-1.7],[1.7,-1.7],[1.7,1.7],[-1.7,1.7]];
+  for(let i=0;i<4;i++){const [a,b]=c[i],[d,e]=c[(i+1)%4];tri([x+a,y,z+b],[x+d,y,z+e],apex,hex(i%2?'cfe2e8':'dbe9ec'));branch([x+a,y,z+b],apex,.04,pal.cream);}
+  addCircle(x,z,1.6,'glass-pyramid');}
+ {const x=12.5,z=-10.5,y=height(x,z);box(x,y+.72,z,1.1,.08,1.1,pal.cream);box(x,y,z,.12,.72,.12,pal.bark);emptyChair(x-1.05,z+.2);emptyChair(x+1.05,z-.2);cone(x,y+2.2,z,1.5,.05,.5,pal.pink,10);branch([x,y+.8,z],[x,y+2.2,z],.03,pal.bark);}
+ for(const [x,z,y,s] of [[55,-20,20,1.2],[60,5,22,1],[45,-40,20,.9],[38,10,26,.8]]){
+  cone(x,y-6*s,z,.15,3*s,6*s,hex('a5aa9c'),8);cone(x,y,z,3*s,2.8*s,.35,pal.grass,10);
+  box(x-.4*s,y+.35,z,1.6*s,1.2*s,1.3*s,hex('e2d8c2'));quad([x-1.3*s,y+.35+1.2*s,z-.75*s],[x+.5*s,y+.35+1.2*s,z-.75*s],[x+.5*s,y+.35+1.9*s,z],[x-1.3*s,y+.35+1.9*s,z],pal.blue);quad([x-1.3*s,y+.35+1.9*s,z],[x+.5*s,y+.35+1.9*s,z],[x+.5*s,y+.35+1.2*s,z+.75*s],[x-1.3*s,y+.35+1.2*s,z+.75*s],hex('8fa7aa'));
+  sphere(x+1.4*s,y+1.1*s,z+.5*s,.7*s,.9*s,.7*s,pal.olive,7,4);
+  for(let k=0;k<4;k++){const a=k*1.6;branch([x+Math.cos(a)*s,y-1.5*s,z+Math.sin(a)*s],[x+Math.cos(a)*1.2*s,y-4.5*s-k*.4,z+Math.sin(a)*1.2*s],.04,pal.bark);}
+ }
+ sceneryBatch(17,-15,58);
+}
+// 4. The pinwheel hill: two small windmills with different sails and curved lavender rows.
+{
+ const pinwheel=(x,z,h,tint,blades,phase)=>{
+  const y=height(x,z);cone(x,y,z,1.5,.85,h,hex('e2d9c4'),9);cone(x,y+h,z,1.15,0,1.6,tint,9);box(x,y,z+1.42,.7,1.3,.1,pal.bark);addCircle(x,z,1.5,'pinwheel');
+  const hub=y+h-.9;sphere(x,hub,z+1,.28,.28,.28,pal.stone,6,4);sceneryBatch(x,z,h+7);
+  for(let i=0;i<blades;i++){const a=i*Math.PI*2/blades,px=r=>Math.cos(a)*r,py=r=>Math.sin(a)*r;branch([0,0,0],[px(4.4),py(4.4),0],.05,pal.bark);quad([px(1.2),py(1.2),0],[px(4.4),py(4.4),0],[px(4.4)-Math.sin(a)*1.2,py(4.4)+Math.cos(a)*1.2,0],[px(1.2)-Math.sin(a)*.5,py(1.2)+Math.cos(a)*.5,0],i%2?pal.cream:tint);}
+  movingSails.push({...batch(),x,z,r:h+7,offset:new Float32Array([x,hub,z+1.15]),phase});
+ };
+ pinwheel(-19,-24,7,pal.pink,4,.3);pinwheel(-23.5,-15,6,pal.blue,6,1.4);
+ for(let row=0;row<4;row++)for(let k=0;k<26;k++){const a=-.9+k*.07,r=6+row*1.4,x=-15+Math.cos(a+Math.PI)*r,z=-21+Math.sin(a+Math.PI)*r*.6;if(!reserved(x,z)||height(x,z)<1.5)continue;const y=height(x,z);tri([x-.18,y,z],[x,y+.55,z],[x+.18,y,z],row%2?pal.purple:hex('c2b3cf'));tri([x,y,z-.18],[x,y+.55,z],[x,y,z+.18],row%2?pal.purple:hex('c2b3cf'));}
+ sceneryBatch(-21,-20,9);
+}
+// 5. The sky terraces: a water channel follows the terrace line, with two sluice gates and a plank bridge.
+{
+ const water=hex('a8c8c9');let last=null;
+ for(let x=17;x<=47;x+=1.5){const z=-65.4+Math.sin(x*.25)*.45,y=height(x,z);if(y<1){last=null;continue;}const p=[x,y+.07,z];if(last){quad([last[0],last[1],last[2]-.35],[p[0],p[1],p[2]-.35],[p[0],p[1],p[2]+.35],[last[0],last[1],last[2]+.35],water);box((last[0]+p[0])/2,Math.min(last[1],p[1])-.12,last[2]+.45,1.5,.22,.12,hex('b8b9a8'));}last=p;}
+ for(const gx of [26,39.5]){const gz=-65.4+Math.sin(gx*.25)*.45,gy=height(gx,gz);for(const d of [-.5,.5])box(gx,gy,gz+d,.14,1,.14,pal.bark);box(gx,gy+.35,gz,.12,.55,1,hex('8d8a78'));}
+ {const bz=-65.4+Math.sin(36*.25)*.45;box(36,height(36,bz)+.12,bz,1.6,.1,1.4,pal.bark);}
+ sceneryBatch(32,-66,20);
+}
+// 6. The singing gate: two stacked rock pillars and an arch over the north road, with wind-cut spires around.
+{
+ const x=-10,z=-28.5,y=height(x,z);
+ for(const s of [-1,1]){const lx=x+s*3.2,ly=height(lx,z);for(let k=0;k<4;k++)sphere(lx+s*.08*k,ly+.9+k*1.3,z+(k%2?.18:-.18),1.25-k*.07,.9,1.1,hex(k%2?'9aa39c':'aeb3a6'),8,4);addCircle(lx,z,1.1,'windgate');}
+ for(let k=0;k<=8;k++){const a=Math.PI*k/8;sphere(x-Math.cos(a)*3.2,y+5.5+Math.sin(a)*1.7,z,.95,.72,1,hex(k%2?'a4aca3':'b6b9ab'),7,4);}
+ for(const [dx,dz,h] of [[-6,-4,4.2],[6.5,2,5],[-5.5,5,3.2],[5.5,-5,3.6]]){const p=spot(x+dx,z+dz);if(!p)continue;cone(p[0],height(p[0],p[1]),p[1],.85,.12,h,hex('a2aaa2'),6);addCircle(p[0],p[1],.7,'wind-spire');}
+ sceneryBatch(x,z,14);
+}
+// 7. The snow-ridge cliff: low parapet stones along the headland's edge face the far snow ridge.
+{
+ for(let k=0;k<36;k++){const a=k/36*Math.PI*2,x=6+Math.cos(a)*15.5,z=-96+Math.sin(a)*19.5,y=height(x,z);if(y<2||y>6.5||routeDistance(x,z)<2.6)continue;box(x,y-.15,z,1.3,.6,.55,hex(k%2?'c6c4b4':'b7b8a9'));}
+ sceneryBatch(6,-96,22);
+}
+// 8. The blue far meadow: white flowers, a still pond with a stone rim, and three tall pale stones for distance.
+{
+ for(let i=0;i<620;i++){const x=vrnd(-30,6),z=vrnd(-94,-66),y=height(x,z);if(y<1.2||routeDistance(x,z)<1.9||Math.hypot(x+10,z+73.5)<3)continue;const s=vrnd(.16,.34),c=i%4?pal.cream:hex('c9d8e4');tri([x-.1,y,z],[x,y+s,z],[x+.1,y,z],hex('a8b99d'));sphere(x,y+s,z,.08,.05,.08,c,5,3);}
+ flatDisc(-10,-73.5,2.4,.06,hex('a9cdd2'),14);for(let k=0;k<12;k++){const a=k/12*Math.PI*2,px=-10+Math.cos(a)*2.55,pz=-73.5+Math.sin(a)*2.55;sphere(px,height(px,pz)+.08,pz,.38,.16,.3,pal.stone,6,3);}addCircle(-10,-73.5,2.3,'pond');
+ for(const [mx,mz,h] of [[-5.5,-91.5,3.2],[-23.5,-82.5,2.6],[-1,-78,2.2]]){const p=spot(mx,mz);if(!p)continue;box(p[0],height(p[0],p[1])-.1,p[1],.55,h,.4,hex('e3e0d4'));addCircle(p[0],p[1],.4,'menhir');}
+ sceneryBatch(-12,-80,25);
+}
+// 9. The meadow road: tall grass with seed heads rides the hill beside the road.
+{
+ for(let i=0;i<260;i++){const t=vrnd(0,1),side=i%2?1:-1,off=vrnd(2.6,7),x=8+11*t-17/20.2*off*side,z=-40-17*t-11/20.2*off*side,y=height(x,z);if(y<1||routeDistance(x,z)<2.5)continue;const h=vrnd(.5,1.1);tri([x-.12,y,z],[x+.1,y+h,z+.1],[x+.12,y,z],i%3?hex('b4c29c'):hex('c5c8a0'));if(i%4===0)sphere(x+.1,y+h,z+.1,.07,.12,.07,hex('e1dcc0'),5,3);}
+ sceneryBatch(13,-48,18);
+}
+// 10. The willow water: drooping willows and soft colour patches on the cove, painted rather than mirrored.
+{
+ for(const [wx,wz] of [[26,-51],[21.5,-46.5],[30.5,-51]]){const p=spot(wx,wz);if(!p)continue;const [x,z]=p,y=height(x,z);branch([x,y,z],[x+.2,y+3.3,z],.16,pal.bark);sphere(x+.2,y+3.6,z,1.3,.7,1.3,hex('9fb59a'),8,4);
+  for(let k=0;k<16;k++){const a=k/16*Math.PI*2,r=vrnd(.8,1.5),top=[x+.2+Math.cos(a)*r*.6,y+3.7,z+Math.sin(a)*r*.6];branch(top,[x+.2+Math.cos(a)*r,y+vrnd(1,1.8),z+Math.sin(a)*r],.035,k%3?hex('a9bf98'):hex('b9b7cf'));}addCircle(x,z,.25,'willow');}
+ for(let i=0;i<40;i++){const x=vrnd(28,44),z=vrnd(-53,-41);if(height(x,z)>-.35)continue;flatDisc(x,z,vrnd(.5,1.3),.0,[hex('cfc7df'),hex('bcd6d1'),hex('dccbd2'),hex('c3d7b6')][i%4],7);}
+ sceneryBatch(32,-48,18);
+}
+// 11. A Sunday shore: still figures with parasols, round clipped trees, boats, and ground painted in dots.
+{
+ for(const [fx,fz,c,parasol] of [[35,-60,hex('c99ba5'),true],[39.5,-60,hex('8fa2bd'),false],[44,-60,hex('d6c08e'),true],[44,-64.5,hex('a7b98f'),false]]){const p=spot(fx,fz);if(!p)continue;const [x,z]=p,y=height(x,z);cone(x,y,z,.32,.1,1.25,c,8);sphere(x,y+1.42,z,.15,.17,.15,hex('e3d6c3'),7,4);if(parasol){branch([x+.2,y+.9,z],[x+.2,y+2.1,z],.02,pal.bark);cone(x+.2,y+1.95,z,.9,.04,.35,c,10);}addCircle(x,z,.32,'figure');}
+ for(const [tx2,tz2] of [[39.5,-64.5],[30.5,-60]]){const p=spot(tx2,tz2);if(!p)continue;const y=height(p[0],p[1]);branch([p[0],y,p[1]],[p[0],y+2.2,p[1]],.1,pal.bark);sphere(p[0],y+3,p[1],1.15,1.15,1.15,hex('8fa48a'),10,6);addCircle(p[0],p[1],.12,'tree');}
+ for(const [bx,bz,c] of [[40,-50,pal.pink],[46,-48.5,pal.cream]]){box(bx,.02,bz,.9,.35,2.4,hex('a38f78'));branch([bx,.35,bz],[bx,2.6,bz],.03,pal.bark);tri([bx,.6,bz],[bx,2.5,bz],[bx,.6,bz+1.4],c);}
+ const dots=[hex('d9a7a0'),hex('9fb5c9'),hex('e1cf98'),hex('a5c09a'),hex('c4a8cf')];
+ for(let i=0;i<700;i++){const x=vrnd(32,47),z=vrnd(-66,-56),y=height(x,z);if(y<.5||routeDistance(x,z)<1.7)continue;const d=.09;quad([x-d,y+.03,z-d],[x+d,y+.03,z-d],[x+d,y+.03,z+d],[x-d,y+.03,z+d],dots[i%5]);}
+ sceneryBatch(40,-58,16);
+}
+// 12. The sky shallows: pale plates on the shallow sea either side of the sandbar take the colour of the sky.
+{
+ for(let x=-47;x<-16;x+=2.2)for(let z=9;z<35;z+=2.2){const h=height(x+1.1,z+1.1);if(h>-.03||h<-1.9)continue;const c=vrnd(0,1)<.5?hex('cfe1df'):hex('d9e8e5');quad([x,.035,z],[x,.035,z+2.2],[x+2.2,.035,z+2.2],[x+2.2,.035,z],c);}
+ for(const [px,pz] of [[-38,17],[-27,27],[-42,26]]){branch([px,-.6,pz],[px,1.3,pz],.06,pal.bark);}
+ sceneryBatch(-31,22,24);
+}
+
 // Small patches break up long uniform verges without filling every empty view.
 // Their spacing follows the route; the road surface and sightlines stay clear.
 let vergeIndex=0;
@@ -545,8 +680,10 @@ function visible(b,range=1450){
 function render(){
  viewCos=Math.cos(camera.yaw);viewSin=Math.sin(camera.yaw);viewTangent=Math.tan(CAMERA_FOV*Math.PI/360)*canvas.width/canvas.height;viewPadding=Math.hypot(1,viewTangent);
  drawnVertices=0;drawCalls=0;gl.disable(gl.DEPTH_TEST);gl.useProgram(skyProg);gl.bindBuffer(gl.ARRAY_BUFFER,skyBuf);const a=gl.getAttribLocation(skyProg,'a');gl.enableVertexAttribArray(a);gl.vertexAttribPointer(a,2,gl.FLOAT,false,0,0);
- gl.uniform1f(skyLoc.yaw,camera.yaw);gl.uniform1f(skyLoc.aspect,canvas.width/canvas.height);gl.uniform1f(skyLoc.tanHalfFov,Math.tan(CAMERA_FOV*Math.PI/360));gl.uniform3fv(skyLoc.moonDirection,MOON_DIRECTION);gl.drawArrays(gl.TRIANGLES,0,3);
- gl.enable(gl.DEPTH_TEST);gl.clear(gl.DEPTH_BUFFER_BIT);gl.useProgram(prog);gl.uniformMatrix4fv(loc.uVP,false,vp());gl.uniform3f(loc.uEye,camera.x,camera.y,camera.z);gl.uniform1f(loc.uTime,reduced?0:time);
+ gl.uniform1f(skyLoc.yaw,camera.yaw);gl.uniform1f(skyLoc.aspect,canvas.width/canvas.height);gl.uniform1f(skyLoc.tanHalfFov,Math.tan(CAMERA_FOV*Math.PI/360));gl.uniform3fv(skyLoc.moonDirection,MOON_DIRECTION);gl.uniform3fv(skyLoc.skyLow,skyMood.low);gl.uniform3fv(skyLoc.skyHigh,skyMood.high);gl.drawArrays(gl.TRIANGLES,0,3);
+ gl.enable(gl.DEPTH_TEST);gl.clear(gl.DEPTH_BUFFER_BIT);gl.useProgram(prog);gl.uniformMatrix4fv(loc.uVP,false,vp());gl.uniform3f(loc.uEye,camera.x,camera.y,camera.z);gl.uniform1f(loc.uTime,reduced?0:time);gl.uniform3fv(loc.uFog,skyMood.low);
+ // The far snow ridge keeps its shape through a thinner haze; everything else uses the ordinary fog.
+ gl.uniform1f(loc.uFogScale,.32);draw(mountains);gl.uniform1f(loc.uFogScale,1);
  draw(distant);draw(sea,DRAW_ORIGIN,0,1);for(const chunk of terrainChunks)if(visible(chunk))draw(chunk);gl.enable(gl.POLYGON_OFFSET_FILL);gl.polygonOffset(-1,-1);for(const chunk of roadChunks)if(visible(chunk))draw(chunk);gl.disable(gl.POLYGON_OFFSET_FILL);draw(foam);
  if(visible(WORLD_SCENERY_BOUNDS,650))draw(world);
  for(const chunk of scenery)if(visible(chunk))draw(chunk);draw(clouds);
@@ -576,6 +713,16 @@ function paintNotices(){
  else{document.querySelector('#speaker').textContent=noticeContent.title;document.querySelector('#words').textContent=noticeContent.words;}
 }
 const announcedPlaces=new Set();
+// Regions (Issue #21): the sky and fog drift toward each place's colours, and its own music crossfades in.
+const regionTracker=new RegionTracker(),skyMood={low:new Float32Array(SHORE_REGION.sky[0]),high:new Float32Array(SHORE_REGION.sky[1])},announcedRegions=new Set();
+let music=null;
+function updateRegion(dt){
+ const entered=regionTracker.update(player.x,player.z,dt),region=regionTracker.current;
+ if(entered){music?.play(region.track);if(entered!==SHORE_REGION&&!announcedRegions.has(entered.id)&&showNotice('place','region:'+entered.id,entered.name,entered.en,3.8))announcedRegions.add(entered.id);}
+ const k=1-Math.exp(-dt*.7);
+ for(let i=0;i<3;i++){skyMood.low[i]+=(region.sky[0][i]-skyMood.low[i])*k;skyMood.high[i]+=(region.sky[1][i]-skyMood.high[i])*k;}
+ music?.tick();
+}
 function inputHeld(){return GRID_MODE?gridGesture.held||keys.size>0:gestures.held||keys.size>0;}
 // The newest held key wins; a held slide repeats; a buffered press (key or tap) is never lost while a step plays.
 function heldCommand(){
@@ -605,6 +752,7 @@ function update(dt){
   stepMotion(player,input,dt,collisionWorld);
   updateFootsteps(player.travelled,dt);
  }
+ updateRegion(dt);
  for(const npc of npcs){
   const dist=Math.hypot(player.x-npc.x,player.z-npc.z);
   if(dist>14){npc.encounter=false;continue;}
@@ -697,7 +845,7 @@ function resetInput(){keys.clear();const owner=GRID_MODE?gridGesture.reset():ges
 addEventListener('blur',resetInput);addEventListener('orientationchange',resetInput);
 canvas.addEventListener('blur',resetInput);
 function suspendAudio(){if(audioCtx&&audioCtx.state!=='closed')audioCtx.suspend().catch(()=>{});}
-function resumeAudio(){if(!paused&&!muted&&!contextLost&&!document.hidden&&audioCtx&&audioCtx.state!=='running'&&audioCtx.state!=='closed')audioCtx.resume().catch(()=>{});}
+function resumeAudio(){if(!paused&&!muted&&!contextLost&&!document.hidden&&audioCtx&&audioCtx.state!=='running'&&audioCtx.state!=='closed')audioCtx.resume().then(()=>music?.resync()).catch(()=>{});}
 function openBook(){
  if(!started||paused)return;
  paused=true;resetInput();notices.clear();paintNotices();suspendAudio();document.body.classList.add('reading');travelBook.showModal();
@@ -765,6 +913,7 @@ function audio(){try{
  const gain=audioCtx.createGain();gain.gain.value=.32;noise.connect(filter);filter.connect(gain);gain.connect(master);noise.start();
  const lfo=audioCtx.createOscillator(),lg=audioCtx.createGain();lfo.frequency.value=.09;lg.gain.value=.12;lfo.connect(lg);lg.connect(gain.gain);lfo.start();
  for(const surface of ['sand','grass','stone'])footBuffers[surface]=[makeFootBuffer(surface,0),makeFootBuffer(surface,1)];
+ music=new RegionMusic(audioCtx,master);music.play(regionTracker.current.track);
  audioCtx.resume().catch(()=>{});
 }catch{}}
 function footstep(surface,speed){
@@ -844,4 +993,4 @@ canvas.addEventListener('webglcontextlost',()=>{
  const error=document.querySelector('#error');error.textContent='島を読み込めませんでした。ページを開き直してください。';error.hidden=false;
 });
 // Minimal diagnostic state for development; no interface is added during play.
-window.nagi={get release(){return document.querySelector('meta[name="nagi-release"]')?.content||'local'},get position(){return{x:player.x,z:player.z,yaw:player.yaw}},get camera(){return{...camera}},get turningRate(){return player.yawRate},get continuousRun(){return player.runSeconds},get surge(){return player.surge},get collisionChecks(){return collisionWorld.checks},get actualSpeed(){return player.actualSpeed},get blockedFor(){return player.blockedFor},get monuments(){return monuments.length},get renderedVertices(){return drawnVertices},get drawCalls(){return drawCalls},get started(){return started},get speed(){return Math.hypot(player.vx,player.vz)},get dragging(){return gestures.held},get fov(){return CAMERA_FOV},get greetingDistance(){return lastGreetingDistance},get footsteps(){return footstepCount},get audioState(){return audioCtx?.state||'unavailable'},get footSurface(){return lastFootSurface},get worldVertices(){return terrain.count+roadChunks.reduce((n,b)=>n+b.count,0)+world.count+sea.count+scenery.reduce((n,b)=>n+b.count,0)+movingSails.reduce((n,b)=>n+b.count,0)+birdMesh.count},get places(){return [...shownPlaces]},get islanders(){return npcs.length},get greeted(){return npcs.reduce((a,n)=>a+n.index,0)},get grid(){return walker?{cell:CELL,road:roadCells.has(walker.i+','+walker.j),i:walker.i,j:walker.j,heading:walker.heading,steps:walker.steps,turns:walker.turns,bumps:walker.bumps,visited:walker.visited.size,busy:walker.busy,automap:!automap.hidden}:null}};
+window.nagi={get release(){return document.querySelector('meta[name="nagi-release"]')?.content||'local'},get position(){return{x:player.x,z:player.z,yaw:player.yaw}},get camera(){return{...camera}},get turningRate(){return player.yawRate},get continuousRun(){return player.runSeconds},get surge(){return player.surge},get collisionChecks(){return collisionWorld.checks},get actualSpeed(){return player.actualSpeed},get blockedFor(){return player.blockedFor},get monuments(){return monuments.length},get renderedVertices(){return drawnVertices},get drawCalls(){return drawCalls},get started(){return started},get speed(){return Math.hypot(player.vx,player.vz)},get dragging(){return gestures.held},get fov(){return CAMERA_FOV},get greetingDistance(){return lastGreetingDistance},get footsteps(){return footstepCount},get audioState(){return audioCtx?.state||'unavailable'},get footSurface(){return lastFootSurface},get worldVertices(){return terrain.count+roadChunks.reduce((n,b)=>n+b.count,0)+world.count+sea.count+scenery.reduce((n,b)=>n+b.count,0)+movingSails.reduce((n,b)=>n+b.count,0)+birdMesh.count},get places(){return [...shownPlaces]},get islanders(){return npcs.length},get greeted(){return npcs.reduce((a,n)=>a+n.index,0)},get region(){return regionTracker.current.id},get musicTrack(){return music?.trackId||null},get skyHorizon(){return [...skyMood.low]},get grid(){return walker?{cell:CELL,road:roadCells.has(walker.i+','+walker.j),i:walker.i,j:walker.j,heading:walker.heading,steps:walker.steps,turns:walker.turns,bumps:walker.bumps,visited:walker.visited.size,busy:walker.busy,automap:!automap.hidden}:null}};

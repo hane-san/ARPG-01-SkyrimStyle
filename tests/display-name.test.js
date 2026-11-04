@@ -22,7 +22,7 @@ test('all shipped entrypoints and manifests agree on the display identity',async
 
 test('future naming builds every artifact without changing routes, IDs, icons or game code',async()=>{
  const temp=await mkdtemp(join(tmpdir(),'arpg-display-'));
- const files=['package.json','display-name.js','index.html','manifest.webmanifest','.nojekyll','scripts/build.mjs','scripts/sync-display-name.mjs','assets/nagi-icon-120.png','dist/assets/nagi-icon-120.png','dist/index.html','dist/manifest.webmanifest','dist/nagi-standalone.html','dist/style.css','dist/island.js','dist/movement.js','dist/terrain.js','dist/journey.js','dist/grid.js'];
+ const files=['package.json','display-name.js','index.html','manifest.webmanifest','.nojekyll','scripts/build.mjs','scripts/sync-display-name.mjs','assets/nagi-icon-120.png','dist/assets/nagi-icon-120.png','dist/index.html','dist/manifest.webmanifest','dist/nagi-standalone.html','dist/style.css','dist/island.js','dist/movement.js','dist/terrain.js','dist/journey.js','dist/grid.js','dist/regions.js','dist/music.js'];
  try{
   const before=new Map();
   for(const file of files){await mkdir(dirname(join(temp,file)),{recursive:true});await copyFile(new URL(file,root),join(temp,file));before.set(file,await readFile(join(temp,file)));}

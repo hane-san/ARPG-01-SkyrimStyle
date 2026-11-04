@@ -10,6 +10,7 @@ atexit.register(server.terminate);time.sleep(.5)
 probe="""
 window._gridQA={
  canStep:(i,j,ni,nj)=>walker.canStep(i,j,ni,nj),
+ go(i,j){walker.action=null;walker.i=i;walker.j=j;[walker.x,walker.z]=walker.center(i,j);walker.y=height(walker.x,walker.z)+1.65;},
  roads(){const bad=[];for(const points of routes){const c=gridCells(points,GRID_ORIGIN,CELL);for(let k=1;k<c.length;k++){const [a,b]=[c[k-1],c[k]];if(!walker.canStep(a[0],a[1],b[0],b[1])||!walker.canStep(b[0],b[1],a[0],a[1]))bad.push([a,b]);}}return bad;},
  reach(){
   const seen=new Set(['0,0']),queue=[[0,0]];
@@ -100,6 +101,16 @@ with sync_playwright() as pw:
  page.keyboard.press('h');page.wait_for_timeout(200);assert 'カニ歩き' in page.locator('.book-controls').inner_text()
  page.keyboard.press('Escape');page.wait_for_timeout(200)
  page.screenshot(path=str(root/'grid-desktop.png'))
+ # Regions (Issue #21): the glass house brings its own music and sky; the shore returns to the home theme.
+ assert page.evaluate('nagi.region')=='shore' and page.evaluate('nagi.musicTrack')=='shore'
+ base_sky=page.evaluate('nagi.skyHorizon')
+ page.evaluate('_gridQA.go(-6,-6)')
+ page.wait_for_function("nagi.region==='greenhouse' && nagi.musicTrack==='greenhouse'",timeout=20000)
+ page.wait_for_timeout(2500);assert page.evaluate('nagi.skyHorizon')!=base_sky
+ for region,(i,j) in {'snowridge':(0,-29),'meadow':(-4,-24),'windgate':(-4,-13)}.items():
+  page.evaluate(f'_gridQA.go({i},{j})');page.wait_for_function(f"nagi.region==='{region}' && nagi.musicTrack==='{region}'",timeout=20000)
+ page.evaluate('_gridQA.go(0,0)');page.wait_for_function("nagi.region==='shore' && nagi.musicTrack==='shore'",timeout=20000)
+ assert page.evaluate('nagi.audioState')=='running'
  page.close()
 
  # Touch: upper half ignored; tap is one action; a held slide repeats; a flick turns; rest-then-slide crabs.
@@ -133,4 +144,4 @@ with sync_playwright() as pw:
  mobile.screenshot(path=str(root/'grid-mobile.png'))
  assert not errors,errors
  browser.close()
-print('default grid mode: grid layout, single and gliding steps, quarter turns, crab walk, shore bumps, automap and touch passed')
+print('default grid mode: regional music and sky, grid layout, single and gliding steps, quarter turns, crab walk, shore bumps, automap and touch passed')
