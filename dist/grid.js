@@ -1,26 +1,32 @@
-// Grid travel for the opt-in dungeon-crawler mode (?grid=1): one cell per step, quarter turns.
+// Grid travel (the default dungeon-crawler mode): one cell per step, quarter turns.
 // No DOM, WebGL or audio. The world supplies walkable(), height() and the swept move() of CollisionWorld.
-const gridEase=t=>t*t*(3-2*t);
-export const CELL=3,STEP_SECONDS=.21,QUICK_STEP_SECONDS=.15,TURN_SECONDS=.18,TURN_REPEAT_PAUSE=.14,BUMP_SECONDS=.18,EYE_HEIGHT=1.65;
+// 4.5 m cells. A held walk glides through cells at a constant 18.75 m/s (Shift: about 26 m/s);
+// it eases in from rest and eases out when the finger or key lets go, instead of pausing at every cell.
+export const CELL=4.5,GRID_ORIGIN=Object.freeze([8,30]),STEP_SECONDS=.24,QUICK_STEP_SECONDS=.17,TURN_SECONDS=.18,TURN_REPEAT_PAUSE=.14,BUMP_SECONDS=.18,EYE_HEIGHT=1.65;
 // Headings are compass quarters: 0 north (-z), 1 east (+x), 2 south (+z), 3 west (-x).
 export const HEADINGS=Object.freeze([[0,-1],[1,0],[0,1],[-1,0]]);
 export const HEADING_NAMES=Object.freeze(['北','東','南','西']);
 export const headingYaw=h=>-((h%4+4)%4)*Math.PI/2;
 export function nearestHeading(yaw){return ((Math.round(-yaw/(Math.PI/2))%4)+4)%4;}
 const wrapQuarterAngle=a=>Math.atan2(Math.sin(a),Math.cos(a));
+const turnEase=t=>t*t*(3-2*t);
+// Cubic Hermite from 0 to 1 with start/end slopes m0/m1 (in units of the whole move per duration).
+export function hermite(w,m0,m1){const w2=w*w,w3=w2*w;return (w3-2*w2+w)*m0+(-2*w3+3*w2)+(w3-w2)*m1;}
+export function hermiteSlope(w,m0,m1){return (3*w*w-4*w+1)*m0+(6*w-6*w*w)+(3*w*w-2*w)*m1;}
 export const COMMANDS=Object.freeze(['forward','back','strafeLeft','strafeRight','turnLeft','turnRight']);
 // Movement direction relative to the current heading, in quarter turns.
 const MOVE_OFFSET={forward:0,strafeRight:1,back:2,strafeLeft:3};
 
 export class GridWalker {
- constructor(world,{origin=[0,0],cell=CELL,i=0,j=0,heading=0}={}){
+ constructor(world,{origin=GRID_ORIGIN,cell=CELL,i=0,j=0,heading=0}={}){
   this.world=world;this.origin=origin;this.cell=cell;this.i=i;this.j=j;this.heading=(heading%4+4)%4;
   const [x,z]=this.center(i,j);this.x=x;this.z=z;this.y=world.height(x,z)+EYE_HEIGHT;this.yaw=headingYaw(this.heading);
-  this.action=null;this.cooldown=0;this.steps=0;this.turns=0;this.bumps=0;this.travelled=0;this.speed=0;
+  this.action=null;this.cooldown=0;this.steps=0;this.turns=0;this.bumps=0;this.travelled=0;this.speed=0;this.carry=null;
   this.edges=new Map();this.visited=new Set([this.key(i,j)]);
  }
  key(i,j){return i+','+j;}
  center(i,j){return [this.origin[0]+i*this.cell,this.origin[1]+j*this.cell];}
+ cellOf(x,z){return [Math.round((x-this.origin[0])/this.cell),Math.round((z-this.origin[1])/this.cell)];}
  get busy(){return this.action!==null||this.cooldown>0;}
  // A step is legal only when the swept body reaches the next centre exactly: no water, no props, no sliding.
  canStep(i,j,ni,nj){
@@ -33,8 +39,10 @@ export class GridWalker {
   return ok;
  }
  // Starts a command. Returns 'step', 'turn', 'blocked', or null while a previous action is still playing.
- command(name,{quick=false}={}){
+ // hold: the input is still held, so the step leaves its cell at full speed instead of slowing to a stop.
+ command(name,{quick=false,hold=false}={}){
   if(this.busy||!COMMANDS.includes(name))return null;
+  const carry=this.carry;this.carry=null;
   if(name==='turnLeft'||name==='turnRight'){
    const from=this.yaw,to=headingYaw(this.heading+(name==='turnRight'?1:-1)),delta=wrapQuarterAngle(to-from);
    this.heading=(this.heading+(name==='turnRight'?1:3))%4;this.turns++;
@@ -46,43 +54,90 @@ export class GridWalker {
    this.bumps++;this.action={kind:'bump',t:0,duration:BUMP_SECONDS,ax,az,dx,dz};return 'blocked';
   }
   this.i=ni;this.j=nj;this.visited.add(this.key(ni,nj));this.steps++;
-  this.action={kind:'step',t:0,duration:quick?QUICK_STEP_SECONDS:STEP_SECONDS,ax,az,bx,bz};return 'step';
+  const duration=quick?QUICK_STEP_SECONDS:STEP_SECONDS;
+  // Arriving speed carries into a step in the same direction, so a held walk never pauses between cells.
+  const m0=carry&&carry.dx===dx&&carry.dz===dz?Math.min(1.6,carry.speed*duration/this.cell):0;
+  this.action={kind:'step',t:0,duration,ax,az,bx,bz,dx,dz,s0:0,m0,m1:hold?1:0};
+  // A chained step also uses the part of this frame left over after landing, so the glide never hitches.
+  if(m0>0&&carry.spare>0){
+   const a=this.action;a.t=Math.min(duration,carry.spare);const s=hermite(a.t/duration,m0,a.m1),px=this.x,pz=this.z;
+   this.x=ax+(bx-ax)*s;this.z=az+(bz-az)*s;this.y=this.world.height(this.x,this.z)+EYE_HEIGHT;
+   this.travelled+=Math.hypot(this.x-px,this.z-pz);this.speed=this.travelled/carry.frame;
+  }
+  return 'step';
+ }
+ // The held input ended or changed: finish the current step by slowing to a stop on its cell.
+ easeOut(){
+  const a=this.action;if(!a||a.kind!=='step'||a.m1===0)return;
+  const w=a.t/a.duration,s=a.s0+(1-a.s0)*hermite(w,a.m0,a.m1),rest=a.duration-a.t;
+  if(1-s<1e-4||rest<1e-4){a.m1=0;return;}
+  const velocity=(1-a.s0)*hermiteSlope(w,a.m0,a.m1)/a.duration;
+  Object.assign(a,{t:0,duration:rest,s0:s,m0:Math.min(3,velocity*rest/(1-s)),m1:0});
  }
  // Advances the current animation. Returns the action kind that finished during this update, if any.
  update(dt){
   this.travelled=0;this.speed=0;
   if(!(dt>0&&Number.isFinite(dt)))return null;
-  if(!this.action){this.cooldown=Math.max(0,this.cooldown-dt);return null;}
-  const a=this.action;a.t=Math.min(a.duration,a.t+dt);const u=gridEase(a.t/a.duration);
+  if(!this.action){this.carry=null;this.cooldown=Math.max(0,this.cooldown-dt);return null;}
+  const a=this.action,spare=a.t+dt-a.duration;a.t=Math.min(a.duration,a.t+dt);const w=a.t/a.duration;
   const px=this.x,pz=this.z;
-  if(a.kind==='step'){this.x=a.ax+(a.bx-a.ax)*u;this.z=a.az+(a.bz-a.az)*u;}
-  else if(a.kind==='bump'){const push=Math.sin(Math.PI*a.t/a.duration)*.22;this.x=a.ax+a.dx*push;this.z=a.az+a.dz*push;}
-  else this.yaw=a.fromYaw+a.deltaYaw*u;
+  if(a.kind==='step'){const s=a.s0+(1-a.s0)*hermite(w,a.m0,a.m1);this.x=a.ax+(a.bx-a.ax)*s;this.z=a.az+(a.bz-a.az)*s;}
+  else if(a.kind==='bump'){const push=Math.sin(Math.PI*w)*.22;this.x=a.ax+a.dx*push;this.z=a.az+a.dz*push;}
+  else this.yaw=a.fromYaw+a.deltaYaw*turnEase(w);
   this.y=this.world.height(this.x,this.z)+EYE_HEIGHT;
   if(a.kind==='step'){this.travelled=Math.hypot(this.x-px,this.z-pz);this.speed=this.travelled/dt;}
   if(a.t<a.duration)return null;
   // Land exactly on the grid: no accumulated drift after hundreds of steps.
   if(a.kind==='turn'){this.yaw=headingYaw(this.heading);this.cooldown=TURN_REPEAT_PAUSE;}
   else{[this.x,this.z]=this.center(this.i,this.j);this.y=this.world.height(this.x,this.z)+EYE_HEIGHT;}
+  if(a.kind==='step'&&a.m1>0)this.carry={dx:a.dx,dz:a.dz,speed:(1-a.s0)*a.m1*this.cell/a.duration,spare:Math.max(0,spare),frame:dt};
   this.action=null;return a.kind;
  }
+}
+
+// Roads follow the grid: each route vertex snaps to its cell, and each leg becomes a 4-connected staircase
+// of cell centres that stays within half a cell of the original line.
+export function gridCells(points,origin=GRID_ORIGIN,cell=CELL){
+ const snap=([x,z])=>[Math.round((x-origin[0])/cell),Math.round((z-origin[1])/cell)];
+ const cells=[snap(points[0])];
+ for(let k=1;k<points.length;k++){
+  const [ai,aj]=cells[cells.length-1],[bi,bj]=snap(points[k]),di=Math.abs(bi-ai),dj=Math.abs(bj-aj),si=Math.sign(bi-ai),sj=Math.sign(bj-aj);
+  let i=0,j=0;
+  while(i<di||j<dj){
+   if(j>=dj||(i<di&&(i+.5)/di<(j+.5)/dj))i++;else j++;
+   cells.push([ai+si*i,aj+sj*j]);
+  }
+ }
+ return cells;
+}
+// The same staircase as a polyline through cell centres, merging straight runs.
+export function gridRoute(points,origin=GRID_ORIGIN,cell=CELL){
+ const cells=gridCells(points,origin,cell),out=[cells[0]];
+ for(let k=1;k<cells.length;k++){
+  const last=out[out.length-1],prev=out.length>1?out[out.length-2]:null,c=cells[k];
+  if(c[0]===last[0]&&c[1]===last[1])continue;
+  if(prev&&(prev[0]===last[0]&&last[0]===c[0]||prev[1]===last[1]&&last[1]===c[1]))out[out.length-1]=c;else out.push(c);
+ }
+ return out.map(([i,j])=>[origin[0]+i*cell,origin[1]+j*cell]);
 }
 
 // Keyboard: W/S or ↑/↓ step, A/D side-step, Q/E or ←/→ turn a quarter. The newest held key wins.
 const KEY_COMMANDS={KeyW:'forward',ArrowUp:'forward',KeyS:'back',ArrowDown:'back',KeyA:'strafeLeft',KeyD:'strafeRight',KeyQ:'turnLeft',ArrowLeft:'turnLeft',KeyE:'turnRight',ArrowRight:'turnRight'};
 export function keyCommand(code){return KEY_COMMANDS[code]||null;}
 
-// Touch: one finger in the lower half. Slide up/down to step forward/back, left/right to turn.
-// Holding keeps repeating; a short tap is one step forward. Multitouch cancels everything.
-export const SWIPE_DISTANCE=22,TAP_DISTANCE=10,TAP_SECONDS=.3;
-export function swipeCommand(dx,dy){
+// Touch: one finger in the lower half. Slide up/down to step forward/back (back keeps facing forward).
+// A quick sideways flick turns a quarter. A sideways slide that starts after the finger has rested or walked
+// for HOLD_SECONDS side-steps instead (crab walk). Holding repeats; a short tap is one step forward.
+export const SWIPE_DISTANCE=22,TAP_DISTANCE=10,TAP_SECONDS=.3,HOLD_SECONDS=.3;
+export function swipeCommand(dx,dy,crab=false){
  if(Math.hypot(dx,dy)<SWIPE_DISTANCE)return null;
- return Math.abs(dy)>=Math.abs(dx)?(dy<0?'forward':'back'):(dx<0?'turnLeft':'turnRight');
+ if(Math.abs(dy)>=Math.abs(dx))return dy<0?'forward':'back';
+ return crab?(dx<0?'strafeLeft':'strafeRight'):(dx<0?'turnLeft':'turnRight');
 }
 export class GridGesture {
- constructor(){this.contacts=new Set();this.id=null;this.origin=null;this.started=0;this.command=null;this.blocked=false;this.moved=false;}
+ constructor(){this.contacts=new Set();this.id=null;this.origin=null;this.started=0;this.command=null;this.blocked=false;this.moved=false;this.sideways=null;}
  get held(){return this.id!==null;}
- clearOwner(){const id=this.id;this.id=null;this.origin=null;this.command=null;this.moved=false;return id;}
+ clearOwner(){const id=this.id;this.id=null;this.origin=null;this.command=null;this.moved=false;this.sideways=null;return id;}
  reset(){const id=this.clearOwner();this.contacts.clear();this.blocked=false;return id;}
  begin(e,bounds,now){
   if(e.button>0)return false;
@@ -92,14 +147,20 @@ export class GridGesture {
    if(this.blocked)return false;
   }
   if(this.held||e.clientY-bounds.top<bounds.height*.5)return false;
-  this.id=e.pointerId;this.origin={x:e.clientX,y:e.clientY};this.started=now;this.command=null;this.moved=false;return true;
+  this.id=e.pointerId;this.origin={x:e.clientX,y:e.clientY};this.started=now;this.command=null;this.moved=false;this.sideways=null;return true;
  }
- move(e){
+ move(e,now){
   if(e.pointerId!==this.id)return false;
-  if(e.pointerType==='mouse'&&(e.buttons&1)===0){this.end(e);return false;}
+  if(e.pointerType==='mouse'&&(e.buttons&1)===0){this.end(e,now);return false;}
   const dx=e.clientX-this.origin.x,dy=e.clientY-this.origin.y;
   if(Math.hypot(dx,dy)>TAP_DISTANCE)this.moved=true;
-  this.command=swipeCommand(dx,dy);return true;
+  const direction=swipeCommand(dx,dy);
+  if(direction==='turnLeft'||direction==='turnRight'){
+   // Decide once per sideways slide: a flick turns, a slide after resting or walking crabs.
+   if(this.sideways===null)this.sideways=now-this.started>=HOLD_SECONDS?'crab':'turn';
+   this.command=swipeCommand(dx,dy,this.sideways==='crab');
+  }else{this.sideways=null;this.command=direction;}
+  return true;
  }
  // Returns 'tap' when the release was a short, still press; otherwise true/false for ownership.
  end(e,now){

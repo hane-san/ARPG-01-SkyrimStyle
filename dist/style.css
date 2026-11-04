@@ -100,12 +100,12 @@ button:focus-visible{outline:2px solid #385e4b;outline-offset:4px}
 }
 
 /* Opt-in grid mode (?grid=1): a small automap below the travel book button, clear of the lower touch half. */
-#automap{position:fixed;inset:auto;top:calc(var(--safe-top) + 72px);right:max(4vw,var(--safe-right));width:112px;height:112px;border:1px solid #5d786b55;pointer-events:none;opacity:.85}
+#automap{position:fixed;inset:auto;top:calc(var(--safe-top) + 68px);right:max(4vw,var(--safe-right));width:148px;height:148px;border:1px solid #f3f0e255;border-radius:6px;box-shadow:0 4px 18px #1d2e2a40;pointer-events:none}
 #automap[hidden],body:not(.playing) #automap{display:none}
 .reading #automap{opacity:0}
 
-@media(max-width:700px),(pointer:coarse){.grid-mode #greeting{top:calc(var(--safe-top) + 198px)}}
+@media(max-width:700px),(pointer:coarse){.grid-mode #greeting{top:calc(var(--safe-top) + 230px)}}
 @media(max-height:600px) and (orientation:landscape){
- #automap{top:calc(var(--safe-top) + 12px);right:calc(max(4vw,var(--safe-right)) + 56px);width:88px;height:88px}
- .grid-mode #greeting{top:calc(var(--safe-top) + 70px);max-width:calc(100vw - 12vw - 170px)}
+ #automap{top:calc(var(--safe-top) + 12px);right:calc(max(4vw,var(--safe-right)) + 56px);width:112px;height:112px}
+ .grid-mode #greeting{top:calc(var(--safe-top) + 70px);max-width:calc(100vw - 12vw - 200px)}
 }
