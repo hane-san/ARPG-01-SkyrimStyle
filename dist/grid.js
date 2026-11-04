@@ -2,7 +2,7 @@
 // No DOM, WebGL or audio. The world supplies walkable(), height() and the swept move() of CollisionWorld.
 // 4.5 m cells. A held walk glides through cells at a constant 18.75 m/s (Shift: about 26 m/s);
 // it eases in from rest and eases out when the finger or key lets go, instead of pausing at every cell.
-export const CELL=4.5,GRID_ORIGIN=Object.freeze([8,30]),STEP_SECONDS=.24,QUICK_STEP_SECONDS=.17,TURN_SECONDS=.3,TURN_REPEAT_PAUSE=.28,BUMP_SECONDS=.26,EYE_HEIGHT=1.65,EYE_SETTLE_SECONDS=.1,EYE_FLOOR=1.4,EYE_SPREAD=2.6;
+export const CELL=6,GRID_ORIGIN=Object.freeze([8,30]),STEP_SECONDS=.32,QUICK_STEP_SECONDS=.23,TURN_SECONDS=.55,TURN_AROUND_SECONDS=.95,TURN_REPEAT_PAUSE=.2,BUMP_SECONDS=.26,EYE_HEIGHT=1.65,EYE_SETTLE_SECONDS=.1,EYE_FLOOR=1.4,EYE_SPREAD=2.6;
 // Headings are compass quarters: 0 north (-z), 1 east (+x), 2 south (+z), 3 west (-x).
 export const HEADINGS=Object.freeze([[0,-1],[1,0],[0,1],[-1,0]]);
 export const HEADING_NAMES=Object.freeze(['北','東','南','西']);
@@ -14,7 +14,9 @@ const turnEase=t=>t*t*t*(t*(6*t-15)+10);
 // Cubic Hermite from 0 to 1 with start/end slopes m0/m1 (in units of the whole move per duration).
 export function hermite(w,m0,m1){const w2=w*w,w3=w2*w;return (w3-2*w2+w)*m0+(-2*w3+3*w2)+(w3-w2)*m1;}
 export function hermiteSlope(w,m0,m1){return (3*w*w-4*w+1)*m0+(6*w-6*w*w)+(3*w*w-2*w)*m1;}
-export const COMMANDS=Object.freeze(['forward','back','strafeLeft','strafeRight','turnLeft','turnRight']);
+export const COMMANDS=Object.freeze(['forward','back','strafeLeft','strafeRight','turnLeft','turnRight','turnAround']);
+// Touch commands that act once per slide rather than repeating while the finger is held.
+export const ONE_SHOT=Object.freeze(new Set(['back','turnAround']));
 // Movement direction relative to the current heading, in quarter turns.
 const MOVE_OFFSET={forward:0,strafeRight:1,back:2,strafeLeft:3};
 
@@ -51,10 +53,12 @@ export class GridWalker {
  command(name,{quick=false,hold=false}={}){
   if(this.busy||!COMMANDS.includes(name))return null;
   const carry=this.carry;this.carry=null;
-  if(name==='turnLeft'||name==='turnRight'){
-   const from=this.yaw,to=headingYaw(this.heading+(name==='turnRight'?1:-1)),delta=wrapQuarterAngle(to-from);
-   this.heading=(this.heading+(name==='turnRight'?1:3))%4;this.turns++;
-   this.action={kind:'turn',t:0,duration:TURN_SECONDS,fromYaw:from,deltaYaw:delta};return 'turn';
+  if(name==='turnLeft'||name==='turnRight'||name==='turnAround'){
+   const quarters=name==='turnRight'?1:name==='turnLeft'?-1:2,from=this.yaw;
+   // An about-face always turns to the right, through a full half turn.
+   const delta=quarters===2?-Math.PI:wrapQuarterAngle(headingYaw(this.heading+quarters)-from);
+   this.heading=(this.heading+quarters+4)%4;this.turns++;
+   this.action={kind:'turn',t:0,duration:quarters===2?TURN_AROUND_SECONDS:TURN_SECONDS,fromYaw:from,deltaYaw:delta};return 'turn';
   }
   const [dx,dz]=HEADINGS[(this.heading+MOVE_OFFSET[name])%4],ni=this.i+dx,nj=this.j+dz;
   const [ax,az]=this.center(this.i,this.j),[bx,bz]=this.center(ni,nj);
@@ -114,8 +118,15 @@ export class GridWalker {
 
 // Roads follow the grid: each route vertex snaps to its cell, and each leg becomes a 4-connected staircase
 // of cell centres that stays within half a cell of the original line.
-export function gridCells(points,origin=GRID_ORIGIN,cell=CELL){
- const snap=([x,z])=>[Math.round((x-origin[0])/cell),Math.round((z-origin[1])/cell)];
+// With `walkable`, a vertex snaps to the nearest of its four surrounding cells whose centre is dry land, so a road
+// that ends at the water's edge never ends in the sea.
+export function gridCells(points,origin=GRID_ORIGIN,cell=CELL,walkable=null){
+ const snap=([x,z])=>{
+  const u=(x-origin[0])/cell,v=(z-origin[1])/cell,round=[Math.round(u),Math.round(v)];
+  if(!walkable)return round;
+  const options=[[Math.floor(u),Math.floor(v)],[Math.ceil(u),Math.floor(v)],[Math.floor(u),Math.ceil(v)],[Math.ceil(u),Math.ceil(v)]].sort((a,b)=>Math.hypot(a[0]-u,a[1]-v)-Math.hypot(b[0]-u,b[1]-v));
+  return options.find(([i,j])=>walkable(origin[0]+i*cell,origin[1]+j*cell))||round;
+ };
  const cells=[snap(points[0])];
  for(let k=1;k<points.length;k++){
   const [ai,aj]=cells[cells.length-1],[bi,bj]=snap(points[k]),di=Math.abs(bi-ai),dj=Math.abs(bj-aj),si=Math.sign(bi-ai),sj=Math.sign(bj-aj);
@@ -128,8 +139,8 @@ export function gridCells(points,origin=GRID_ORIGIN,cell=CELL){
  return cells;
 }
 // The same staircase as a polyline through cell centres, merging straight runs.
-export function gridRoute(points,origin=GRID_ORIGIN,cell=CELL){
- const cells=gridCells(points,origin,cell),out=[cells[0]];
+export function gridRoute(points,origin=GRID_ORIGIN,cell=CELL,walkable=null){
+ const cells=gridCells(points,origin,cell,walkable),out=[cells[0]];
  for(let k=1;k<cells.length;k++){
   const last=out[out.length-1],prev=out.length>1?out[out.length-2]:null,c=cells[k];
   if(c[0]===last[0]&&c[1]===last[1])continue;
@@ -139,22 +150,26 @@ export function gridRoute(points,origin=GRID_ORIGIN,cell=CELL){
 }
 
 // Keyboard: W/S or ↑/↓ step, A/D side-step, Q/E or ←/→ turn a quarter. The newest held key wins.
-const KEY_COMMANDS={KeyW:'forward',ArrowUp:'forward',KeyS:'back',ArrowDown:'back',KeyA:'strafeLeft',KeyD:'strafeRight',KeyQ:'turnLeft',ArrowLeft:'turnLeft',KeyE:'turnRight',ArrowRight:'turnRight'};
+const KEY_COMMANDS={KeyX:'turnAround',KeyW:'forward',ArrowUp:'forward',KeyS:'back',ArrowDown:'back',KeyA:'strafeLeft',KeyD:'strafeRight',KeyQ:'turnLeft',ArrowLeft:'turnLeft',KeyE:'turnRight',ArrowRight:'turnRight'};
 export function keyCommand(code){return KEY_COMMANDS[code]||null;}
 
-// Touch: one finger in the lower half. Slide up/down to step forward/back (back keeps facing forward).
-// A quick sideways flick turns a quarter. A sideways slide that starts after the finger has rested or walked
-// for HOLD_SECONDS side-steps instead (crab walk). Holding repeats; a short tap is one step forward.
+// Touch: one finger in the lower half. Slide up to walk forward (holding repeats); a short tap is one step forward.
+// A quick downward flick steps back once, still facing forward. A downward slide that starts after the finger has
+// rested or walked for HOLD_SECONDS turns right round instead (once). A quick sideways flick turns a quarter;
+// a sideways slide after HOLD_SECONDS side-steps (crab walk).
 export const SWIPE_DISTANCE=22,TAP_DISTANCE=10,TAP_SECONDS=.3,HOLD_SECONDS=.2;
 export function swipeCommand(dx,dy,crab=false){
  if(Math.hypot(dx,dy)<SWIPE_DISTANCE)return null;
- if(Math.abs(dy)>=Math.abs(dx))return dy<0?'forward':'back';
+ if(Math.abs(dy)>=Math.abs(dx))return dy<0?'forward':crab?'turnAround':'back';
  return crab?(dx<0?'strafeLeft':'strafeRight'):(dx<0?'turnLeft':'turnRight');
 }
 export class GridGesture {
- constructor(){this.contacts=new Set();this.id=null;this.origin=null;this.started=0;this.command=null;this.blocked=false;this.moved=false;this.sideways=null;}
+ constructor(){this.contacts=new Set();this.id=null;this.origin=null;this.started=0;this.command=null;this.blocked=false;this.moved=false;this.sideways=null;this.downward=null;this.taken=null;}
  get held(){return this.id!==null;}
- clearOwner(){const id=this.id;this.id=null;this.origin=null;this.command=null;this.moved=false;this.sideways=null;return id;}
+ clearOwner(){const id=this.id;this.id=null;this.origin=null;this.command=null;this.moved=false;this.sideways=null;this.downward=null;this.taken=null;return id;}
+ // The command to act on now: a one-shot (step back, about-face) is offered once per slide.
+ available(){return this.command&&!(ONE_SHOT.has(this.command)&&this.taken===this.command)?this.command:null;}
+ take(command){if(ONE_SHOT.has(command))this.taken=command;}
  reset(){const id=this.clearOwner();this.contacts.clear();this.blocked=false;return id;}
  begin(e,bounds,now){
   if(e.button>0)return false;
@@ -164,7 +179,7 @@ export class GridGesture {
    if(this.blocked)return false;
   }
   if(this.held||e.clientY-bounds.top<bounds.height*.5)return false;
-  this.id=e.pointerId;this.origin={x:e.clientX,y:e.clientY};this.started=now;this.command=null;this.moved=false;this.sideways=null;return true;
+  this.id=e.pointerId;this.origin={x:e.clientX,y:e.clientY};this.started=now;this.command=null;this.moved=false;this.sideways=null;this.downward=null;this.taken=null;return true;
  }
  move(e,now){
   if(e.pointerId!==this.id)return false;
@@ -172,11 +187,16 @@ export class GridGesture {
   const dx=e.clientX-this.origin.x,dy=e.clientY-this.origin.y;
   if(Math.hypot(dx,dy)>TAP_DISTANCE)this.moved=true;
   const direction=swipeCommand(dx,dy);
+  // Decide once per slide direction: a flick turns or steps back, a slide after resting or walking crabs or turns round.
+  const late=now-this.started>=HOLD_SECONDS;
   if(direction==='turnLeft'||direction==='turnRight'){
-   // Decide once per sideways slide: a flick turns, a slide after resting or walking crabs.
-   if(this.sideways===null)this.sideways=now-this.started>=HOLD_SECONDS?'crab':'turn';
-   this.command=swipeCommand(dx,dy,this.sideways==='crab');
-  }else{this.sideways=null;this.command=direction;}
+   if(this.sideways===null)this.sideways=late?'crab':'turn';
+   this.downward=null;this.command=swipeCommand(dx,dy,this.sideways==='crab');
+  }else if(direction==='back'){
+   if(this.downward===null)this.downward=late?'round':'step';
+   this.sideways=null;this.command=this.downward==='round'?'turnAround':'back';
+  }else{this.sideways=null;this.downward=null;this.command=direction;}
+  if(this.command!==this.taken&&!ONE_SHOT.has(this.command))this.taken=null;
   return true;
  }
  // Returns 'tap' when the release was a short, still press; otherwise true/false for ownership.

@@ -3,7 +3,7 @@ const {CRUISE_SPEED,footStride,nearPlaneMargin,CollisionWorld,circleCollider,box
 const {journeyScenes,landscapeColor,readingSeconds,JourneyNotices}=await import('./journey.js'+new URL(import.meta.url).search);
 const {REGIONS,SHORE_REGION,RegionTracker}=await import('./regions.js'+new URL(import.meta.url).search);
 const {RegionMusic}=await import('./music.js'+new URL(import.meta.url).search);
-const {CELL,GRID_ORIGIN,STEP_SECONDS,QUICK_STEP_SECONDS,HEADING_NAMES,GridWalker,GridGesture,keyCommand,automapCells,gridRoute,gridCells}=await import('./grid.js'+new URL(import.meta.url).search);
+const {ONE_SHOT,CELL,GRID_ORIGIN,STEP_SECONDS,QUICK_STEP_SECONDS,HEADING_NAMES,GridWalker,GridGesture,keyCommand,automapCells,gridRoute,gridCells}=await import('./grid.js'+new URL(import.meta.url).search);
 // Dungeon-crawler travel is the default (producer decision 2026-11-04): the same island, one grid cell at a time.
 // ?grid=0 keeps the earlier free walking for comparison and its regression checks.
 const GRID_MODE=new URLSearchParams(location.search).get('grid')!=='0';
@@ -44,10 +44,10 @@ function batch(){const arr=new Float32Array(data);const buffer=gl.createBuffer()
 // Grid mode lays the roads on the grid and puts every prop that blocks a step at a cell centre, so a cell is
 // either open or taken: no half-blocked edges, no posts in the middle of a road. Free walking (?grid=0) keeps the
 // original layout. Terrain heights never change; only drawn roads and prop positions follow the grid.
-const travelRoutes=GRID_MODE?routes.map(points=>gridRoute(points,GRID_ORIGIN,CELL)):routes;
+const travelRoutes=GRID_MODE?routes.map(points=>gridRoute(points,GRID_ORIGIN,CELL,walkable)):routes;
 const routeDistance=(x,z)=>distanceToRoute(x,z,travelRoutes);
-const roadCells=new Set(),claimedCells=new Set();
-if(GRID_MODE)for(const points of routes)for(const [i,j] of gridCells(points,GRID_ORIGIN,CELL))roadCells.add(i+','+j);
+const roadCells=new Set(),claimedCells=new Set(),approachKept=new Set();
+if(GRID_MODE)for(const points of routes)for(const [i,j] of gridCells(points,GRID_ORIGIN,CELL,walkable))roadCells.add(i+','+j);
 const cellIndex=(x,z)=>[Math.round((x-GRID_ORIGIN[0])/CELL),Math.round((z-GRID_ORIGIN[1])/CELL)];
 const cellCentre=(i,j)=>[GRID_ORIGIN[0]+i*CELL,GRID_ORIGIN[1]+j*CELL];
 // Props never take a pinch cell: one whose open neighbours would lose their local connection (judged on the bare
@@ -69,15 +69,20 @@ function pinchCell(i,j){
  return open.some(c=>!seen.has(c.join(',')));
 }
 // The nearest free, dry cell (searching up to two rings when asked). Roads and taken cells are skipped.
-function claimCell(x,z,search=false){
+function claimCell(x,z,search=false,accept=null){
  const [i0,j0]=cellIndex(x,z);let best=null;
- for(let ring=0;ring<=(search?2:0)&&!best;ring++)for(let dj=-ring;dj<=ring;dj++)for(let di=-ring;di<=ring;di++){
+ for(let ring=0;ring<=(search?3:0)&&!best;ring++)for(let dj=-ring;dj<=ring;dj++)for(let di=-ring;di<=ring;di++){
   if(Math.max(Math.abs(di),Math.abs(dj))!==ring)continue;
   const key=(i0+di)+','+(j0+dj),[cx,cz]=cellCentre(i0+di,j0+dj);
-  if(roadCells.has(key)||claimedCells.has(key)||!walkable(cx,cz)||pinchCell(i0+di,j0+dj))continue;
+  if(roadCells.has(key)||claimedCells.has(key)||approachKept.has(key)||!walkable(cx,cz)||pinchCell(i0+di,j0+dj)||(accept&&!accept(i0+di,j0+dj)))continue;
   const d=Math.hypot(cx-x,cz-z);if(!best||d<best.d)best={key,cx,cz,d};
  }
  if(!best)return null;claimedCells.add(best.key);return [best.cx,best.cz];
+}
+// Someone to talk to needs a cell beside them to stand on: a road cell, or a free cell that is then kept free.
+function approachCell(i,j){
+ for(const [di,dj] of QUARTERS){const a=i+di,b=j+dj,key=a+','+b;if(!terrainSteps.canStep(a,b,i,j)&&!terrainSteps.canStep(i,j,a,b))continue;if(roadCells.has(key))return key;if(!claimedCells.has(key)&&walkable(...cellCentre(a,b)))return key;}
+ return null;
 }
 // Gateways stay on their road cell: the path runs straight through between their posts.
 function gatewayCell(x,z){if(!GRID_MODE)return [x,z];const [i,j]=cellIndex(x,z);claimedCells.add(i+','+j);return cellCentre(i,j);}
@@ -87,12 +92,15 @@ function gridProp(place,blocks=()=>true,search=false){
 }
 const [tx,tz]=gatewayCell(23,8),[sx,sz]=gatewayCell(-4,-13);
 // Issue #21 set pieces own these rectangles (x0,x1,z0,z1): no random tree or rock grows inside them in either mode.
-const RESERVED=[[-26.5,-11.5,0,10.5],[10,23,-25,-4],[-26,-16,-27,-12],[-12.5,-7.5,-76,-71]];
+// Set pieces sit on cell centres in both modes, so they fit the grid's cells exactly whatever the cell size.
+const snapCentre=(x,z)=>cellCentre(...cellIndex(x,z)),cellRect=([x,z],i0,i1,j0,j1)=>[x+(i0-.5)*CELL,x+(i1+.5)*CELL,z+(j0-.5)*CELL,z+(j1+.5)*CELL];
+const GLASSHOUSE=snapCentre(-19,5),HAMLET=snapCentre(17,-15),PINWHEELS=snapCentre(-21,-20),POND=snapCentre(-10,-73.5),WINDGATE=snapCentre(-10,-28.5);
+const RESERVED=[cellRect(GLASSHOUSE,-1,1,0,1),cellRect(HAMLET,-1,1,-1,1),cellRect(PINWHEELS,0,1,-1,1),cellRect(POND,0,0,0,0)];
 const reserved=(x,z)=>RESERVED.some(([x0,x1,z0,z1])=>x>=x0&&x<=x1&&z>=z0&&z<=z1);
 if(GRID_MODE)for(const [x0,x1,z0,z1] of RESERVED){const [i0,j0]=cellIndex(x0,z0),[i1,j1]=cellIndex(x1,z1);for(let j=j0;j<=j1;j++)for(let i=i0;i<=i1;i++){const [x,z]=cellCentre(i,j);if(reserved(x,z))claimedCells.add(i+','+j);}}
 // The avenue's poplars take the cells beside the landing road before anything else can.
 const avenueSpots=[];
-if(GRID_MODE){const cells=gridCells(routes[0],GRID_ORIGIN,CELL);for(let k=1;k<cells.length-1;k++){const [i,j]=cells[k],[pi,pj]=cells[k-1],z=cellCentre(i,j)[1];if(z>25||z<4||k%2)continue;const di=i-pi,dj=j-pj;for(const side of [-1,1]){const a=i-dj*side,b=j+di*side,key=a+','+b;const [x,zz]=cellCentre(a,b);if(!roadCells.has(key)&&!claimedCells.has(key)&&walkable(x,zz)){claimedCells.add(key);avenueSpots.push([x,zz]);}}}}
+if(GRID_MODE){const cells=gridCells(routes[0],GRID_ORIGIN,CELL,walkable);for(let k=1;k<cells.length-1;k++){const [i,j]=cells[k],[pi,pj]=cells[k-1],z=cellCentre(i,j)[1];if(z>25||z<4||k%2)continue;const di=i-pi,dj=j-pj;for(const side of [-1,1]){const a=i-dj*side,b=j+di*side,key=a+','+b;const [x,zz]=cellCentre(a,b);if(!roadCells.has(key)&&!claimedCells.has(key)&&walkable(x,zz)){claimedCells.add(key);avenueSpots.push([x,zz]);}}}}
 // Free walking (?grid=0) keeps the original open landing road: the avenue is a grid-mode piece only.
 const path=travelRoutes[0];
 const tintBlend=(a,b,t)=>a.map((v,i)=>v+(b[i]-v)*t);
@@ -206,7 +214,8 @@ cone(-48,height(-48,22),22,.1,.08,2.8,pal.bark);for(let i=0;i<3;i++){const x=-48
 const world=batch();
 // Northern scenery is split into small batches, so a phone need not draw plants behind it.
 const scenery=[];
-function sceneryBatch(x,z,r){scenery.push({...batch(),x,z,r:r+(GRID_MODE?CELL:0)});}
+// decal: flat paint lying on the ground (gravel, dots, water) is drawn with a depth offset, like the roads, so it never flickers.
+function sceneryBatch(x,z,r,decal=false){scenery.push({...batch(),x,z,r:r+(GRID_MODE?CELL:0),decal});}
 function umbrella(x,z,s,tint){const y=height(x,z);branch([x,y,z],[x+.2*s,y+3.2*s,z],.14*s,pal.bark);cone(x+.2*s,y+3.05*s,z,1.55*s,.15*s,.65*s,tint,12);sphere(x+.2*s,y+3.7*s,z,.4*s,.16*s,.4*s,pal.cream,8,3);for(let i=0;i<3;i++){const a=i*2.094;branch([x,y+1.8*s,z],[x+Math.cos(a)*1.15*s,y+3.1*s,z+Math.sin(a)*1.15*s],.055*s,pal.pink);}addCircle(x,z,.12*s,'tree');}
 umbrella=gridProp(umbrella);
 function signpost(x,z){const y=height(x,z);box(x,y,z,.12,1.25,.12,pal.bark);box(x+.28,y+1,z,.85,.2,.1,pal.cream);addCircle(x,z,.045,'signpost');}
@@ -403,8 +412,9 @@ for(const [gx,gz] of [[820,-804],[936,-791],[698,-719],[548,-595]]){
 // Water is an actual surface: walking remains on dry land.
 for(let z=-2700;z<2700;z+=90)for(let x=-2700;x<2700;x+=90)quad([x,0,z],[x,0,z+90],[x+90,0,z+90],[x+90,0,z],hex('a5c2be'));
 const sea=batch();
-// Threadlike shoreline ripples. Their low contrast keeps the sea calm.
-for(let i=0;i<110;i++){const a=i/110*Math.PI*2,r=1.015,x=Math.cos(a)*35*r,z=Math.sin(a)*39*r;if(height(x,z)>.2)continue;const dx=-Math.sin(a)*rnd(.5,1.8),dz=Math.cos(a)*rnd(.5,1.8);quad([x-dx,.045,z-dz],[x-dx+.08,.045,z-dz+.08],[x+dx+.08,.045,z+dz+.08],[x+dx,.045,z+dz],hex('cedad0'));}
+// Threadlike shoreline ripples. Their low contrast keeps the sea calm. They float just above the highest wave
+// (0.1 m) so the moving sea never cuts through them and makes them flicker.
+for(let i=0;i<110;i++){const a=i/110*Math.PI*2,r=1.015,x=Math.cos(a)*35*r,z=Math.sin(a)*39*r;if(height(x,z)>.2)continue;const dx=-Math.sin(a)*rnd(.5,1.8),dz=Math.cos(a)*rnd(.5,1.8);quad([x-dx,.12,z-dz],[x-dx+.08,.12,z-dz+.08],[x+dx+.08,.12,z+dz+.08],[x+dx,.12,z+dz],hex('cedad0'));}
 const foam=batch();
 // Soft, low clouds hang over the distant islands.
 for(let i=0;i<13;i++){const a=i/13*Math.PI*2,r=rnd(950,1600),x=Math.cos(a)*r,z=Math.sin(a)*r,y=rnd(160,230);for(let j=0;j<3;j++)sphere(x+j*45,y+j*3,z,75,12,30,hex('d4dbd2'),9,5);}
@@ -420,7 +430,7 @@ function islander(x,z,name,lines,tint){
  box(-.2,.02,.1,.19,.1,.37,ink);box(.2,.02,.1,.19,.1,.37,ink);
  npcs.push({x,z,y:height(x,z),name,lines,mesh:batch(),last:-100,index:0,angle:0,r:2,offset:new Float32Array([x,height(x,z),z])});addCircle(x,z,.46,'islander');
 }
-islander=gridProp(islander,undefined,true);
+if(GRID_MODE){const place=islander;islander=(x,z,...rest)=>{const c=claimCell(x,z,true,(i,j)=>approachCell(i,j)!==null);if(!c)return;const [i,j]=cellIndex(...c),key=approachCell(i,j);if(key&&!roadCells.has(key))approachKept.add(key);return place(c[0],c[1],...rest);};}
 islander(6.3,18.2,'浜のひと',['……ようこそ。潮が、あなたを連れてきた。','この島では、どこへ急ぐこともありません。'], 'a3b4b2');
 islander(20.5,5.3,'面を干すひと',['こんにちは。今日は、いい凪ですね。','あの花は、昨日まで青かったのですよ。'], 'b4a7bd');
 islander(-6,-15.5,'丘のひと',['おかえりなさい。……はじめまして、でしたか。','海の向こうにも、きっと、誰かの島がある。'], 'b6bba0');
@@ -507,50 +517,56 @@ for(const scene of scenes){
 // older seeded layout (plants, verges, islanders) keeps every position. Each piece is its own culled batch.
 let vignetteSeed=40213;const vrnd=(a,b)=>{vignetteSeed=(1664525*vignetteSeed+1013904223)>>>0;return a+(b-a)*vignetteSeed/4294967296;};
 const spot=(x,z)=>GRID_MODE?claimCell(x,z,true):[x,z];
+// Paint on the sea floats just above the highest wave (0.1 m) so the moving surface never cuts through it.
+const SEA_PAINT=.12,seaDisc=(x,z,r,col,sides=8)=>{for(let k=0;k<sides;k++){const a=k/sides*Math.PI*2,b=(k+1)/sides*Math.PI*2;tri([x,SEA_PAINT,z],[x+Math.cos(a)*r,SEA_PAINT,z+Math.sin(a)*r],[x+Math.cos(b)*r,SEA_PAINT,z+Math.sin(b)*r],col);}};
 const flatDisc=(x,z,r,lift,col,sides=10)=>{for(let k=0;k<sides;k++){const a=k/sides*Math.PI*2,b=(k+1)/sides*Math.PI*2,p=(t)=>[x+Math.cos(t)*r,height(x+Math.cos(t)*r,z+Math.sin(t)*r)+lift,z+Math.sin(t)*r];tri([x,height(x,z)+lift,z],p(a),p(b),col);}};
 // 1. The avenue beyond: slender poplars frame the landing road and lead the eye to the bright distance.
 for(const [x,z] of avenueSpots){const y=height(x,z);branch([x,y,z],[x,y+3.4,z],.13,pal.bark);sphere(x,y+4.4,z,.95,2.7,.95,hex('8ea58c'),8,5);sphere(x+.2,y+5.6,z-.1,.6,1.4,.6,hex('9db39a'),7,4);addCircle(x,z,.14,'tree');}
 sceneryBatch(3,14,16);
 // 2. The glass house: an open white frame with glass glints, geometric beds, a basin and a gravel aisle.
+// Three cells wide and two deep: the aisle row is open from either gable end, the far row holds beds and a basin.
 {
- const x0=-25.75,x1=-12.25,z0=.75,z1=9.75,zm=5.25,y=height(-19,zm),wall=3.2,ridge=5.3,frame=hex('eef0e6'),glint=hex('d9e9e6');
+ const C=CELL,[gx,gz]=GLASSHOUSE,zA=gz,zB=gz+C,x0=gx-1.5*C,x1=gx+1.5*C,z0=zA-C/2,z1=zB+C/2,zm=(z0+z1)/2,y=height(gx,zm),wall=3.4,ridge=5.8,frame=hex('eef0e6'),glint=hex('d9e9e6');
+ const posts=[x0,gx-C/2,gx+C/2,x1];
  const post=(x,z)=>{branch([x,height(x,z)-.1,z],[x,y+wall,z],.07,frame);addCircle(x,z,.07,'greenhouse-post');};
- for(const x of [x0,-21.25,-16.75,x1])for(const z of [z0,z1])post(x,z);
+ for(const x of posts)for(const z of [z0,z1])post(x,z);
  for(const x of [x0,x1])post(x,zm);
  for(const z of [z0,z1])branch([x0,y+wall,z],[x1,y+wall,z],.06,frame);
  for(const x of [x0,x1])branch([x,y+wall,z0],[x,y+wall,z1],.06,frame);
  branch([x0,y+ridge,zm],[x1,y+ridge,zm],.06,frame);
- for(const x of [x0,-21.25,-16.75,x1])for(const z of [z0,z1])branch([x,y+wall,z],[x,y+ridge,zm],.05,frame);
+ for(const x of posts)for(const z of [z0,z1])branch([x,y+wall,z],[x,y+ridge,zm],.05,frame);
  for(let x=x0+.7;x<x1-.5;x+=1.5)for(const z of [z0,z1])quad([x,y+wall+.02,z],[x+.22,y+wall+.02,z],[x+.22,y+ridge,zm],[x,y+ridge,zm],glint);
  // Low glazed sills along both long sides: the house is entered from either gable end.
- for(const z of [z0,z1]){box(-19,height(-19,z)-.2,z,13.5,.75,.22,hex('d4d6c8'));addBox(-19,z,6.75,.11,'greenhouse-sill');}
+ for(const z of [z0,z1]){box(gx,height(gx,z)-.2,z,3*C,.75,.22,hex('d4d6c8'));addBox(gx,z,1.5*C,.11,'greenhouse-sill');}
  for(let x=x0+.4;x<x1;x+=.9)for(const z of [z0,z1])branch([x,height(x,z)+.5,z],[x,y+wall,z],.015,glint);
- // Gravel aisle along the open row.
- for(let x=x0;x<x1;x+=1.5)quad([x,height(x,1.8)+.03,1.8],[x,height(x,4.2)+.03,4.2],[x+1.5,height(x+1.5,4.2)+.03,4.2],[x+1.5,height(x+1.5,1.8)+.03,1.8],hex((x*2|0)%2?'ddd5c3':'d6cfbe'));
  // Geometric beds and a still basin take the far row.
- for(const bx of [-23.5,-14.5]){const by=height(bx,7.5);box(bx,by-.1,7.5,3.1,.55,3.1,hex('a99f88'));for(let i=0;i<4;i++)for(let j=0;j<4;j++){const fx=bx-1.15+i*.76,fz=6.35+j*.76,c=[pal.pink,pal.purple,pal.cream,pal.blue][(i+j)%4];branch([fx,by+.45,fz],[fx,by+.95,fz],.02,pal.olive);sphere(fx,by+1,fz,.2,.14,.2,c,6,3);}addBox(bx,7.5,1.55,1.55,'greenhouse-bed');}
- {const by=height(-19,7.5);box(-19,by-.1,7.5,3,.6,3,pal.stone);quad([-20.3,by+.52,6.2],[-17.7,by+.52,6.2],[-17.7,by+.52,8.8],[-20.3,by+.52,8.8],hex('acd0d2'));cone(-19,by+.5,7.5,.18,.1,1.1,pal.cream,7);sphere(-19,by+1.6,7.5,.32,.2,.32,pal.cream,8,4);addCircle(-19,7.5,1.5,'greenhouse-basin');}
+ for(const bx of [gx-C,gx+C]){const by=height(bx,zB),half=C*.34;box(bx,by-.1,zB,half*2,.55,half*2,hex('a99f88'));for(let i=0;i<5;i++)for(let j=0;j<5;j++){const fx=bx-half*.8+i*half*.4,fz=zB-half*.8+j*half*.4,c=[pal.pink,pal.purple,pal.cream,pal.blue][(i+j)%4];branch([fx,by+.45,fz],[fx,by+.95,fz],.02,pal.olive);sphere(fx,by+1,fz,.2,.14,.2,c,6,3);}addBox(bx,zB,half,half,'greenhouse-bed');}
+ {const by=height(gx,zB),half=C*.3;box(gx,by-.1,zB,half*2,.6,half*2,pal.stone);quad([gx-half+.2,by+.52,zB-half+.2],[gx+half-.2,by+.52,zB-half+.2],[gx+half-.2,by+.52,zB+half-.2],[gx-half+.2,by+.52,zB+half-.2],hex('acd0d2'));cone(gx,by+.5,zB,.18,.1,1.1,pal.cream,7);sphere(gx,by+1.6,zB,.32,.2,.32,pal.cream,8,4);addCircle(gx,zB,half,'greenhouse-basin');}
  // Hanging pots along the aisle.
- for(let x=x0+2.2;x<x1;x+=2.25){branch([x,y+wall,3],[x,y+wall-.9,3],.012,pal.bark);sphere(x,y+wall-1.05,3,.24,.2,.24,pal.olive,7,4);}
- sceneryBatch(-19,zm,10);
+ for(let x=x0+2.2;x<x1;x+=2.25){branch([x,y+wall,zA],[x,y+wall-.9,zA],.012,pal.bark);sphere(x,y+wall-1.05,zA,.24,.2,.24,pal.olive,7,4);}
+ sceneryBatch(gx,zm,12);
+ // Gravel aisle along the open row (a ground decal).
+ for(let x=x0;x<x1;x+=1.5)quad([x,height(x,zA-1.3)+.03,zA-1.3],[x,height(x,zA+1.3)+.03,zA+1.3],[x+1.5,height(x+1.5,zA+1.3)+.03,zA+1.3],[x+1.5,height(x+1.5,zA-1.3)+.03,zA-1.3],hex((x*2|0)%2?'ddd5c3':'d6cfbe'));
+ sceneryBatch(gx,zA,11,true);
 }
 // 3. The sky hamlet: small houses, a laundry line, a little glass pyramid, an outdoor table and islands afloat.
 {
- rawShoreHouse(17,-15,4.2);rawShoreHouse(21.5,-10.5,3.6);
- {const y=height(12.5,-19.5);for(const dx of [-1.9,1.9]){branch([12.5+dx,height(12.5+dx,-19.5),-19.5],[12.5+dx,y+2.4,-19.5],.05,pal.bark);addCircle(12.5+dx,-19.5,.06,'laundry-post');}
-  branch([10.6,y+2.3,-19.5],[14.4,y+2.3,-19.5],.012,pal.bark);
-  for(let i=0;i<3;i++){const x=10.9+i*1.2;quad([x,y+2.28,-19.5],[x+.9,y+2.28,-19.5],[x+.85,y+1.2,-19.42],[x+.05,y+1.25,-19.45],[pal.cream,pal.pink,pal.blue][i]);}}
- {const x=21.5,z=-19.5,y=height(x,z),apex=[x,y+3.6,z],c=[[-1.7,-1.7],[1.7,-1.7],[1.7,1.7],[-1.7,1.7]];
+ const C=CELL,[hx,hz]=HAMLET,at=(i,j)=>[hx+i*C,hz+j*C];
+ rawShoreHouse(...at(0,0),4.2);rawShoreHouse(...at(-1,1),3.6);
+ {const [lx,lz]=at(0,-1),y=height(lx,lz);for(const dx of [-1.9,1.9]){branch([lx+dx,height(lx+dx,lz),lz],[lx+dx,y+2.4,lz],.05,pal.bark);addCircle(lx+dx,lz,.06,'laundry-post');}
+  branch([lx-1.9,y+2.3,lz],[lx+1.9,y+2.3,lz],.012,pal.bark);
+  for(let i=0;i<3;i++){const x=lx-1.6+i*1.2;quad([x,y+2.28,lz],[x+.9,y+2.28,lz],[x+.85,y+1.2,lz+.08],[x+.05,y+1.25,lz+.05],[pal.cream,pal.pink,pal.blue][i]);}}
+ {const [x,z]=at(1,1),y=height(x,z),apex=[x,y+3.6,z],c=[[-1.7,-1.7],[1.7,-1.7],[1.7,1.7],[-1.7,1.7]];
   for(let i=0;i<4;i++){const [a,b]=c[i],[d,e]=c[(i+1)%4];tri([x+a,y,z+b],[x+d,y,z+e],apex,hex(i%2?'cfe2e8':'dbe9ec'));branch([x+a,y,z+b],apex,.04,pal.cream);}
   addCircle(x,z,1.6,'glass-pyramid');}
- {const x=12.5,z=-10.5,y=height(x,z);box(x,y+.72,z,1.1,.08,1.1,pal.cream);box(x,y,z,.12,.72,.12,pal.bark);emptyChair(x-1.05,z+.2);emptyChair(x+1.05,z-.2);cone(x,y+2.2,z,1.5,.05,.5,pal.pink,10);branch([x,y+.8,z],[x,y+2.2,z],.03,pal.bark);}
+ {const [x,z]=at(-1,-1),y=height(x,z);box(x,y+.72,z,1.1,.08,1.1,pal.cream);box(x,y,z,.12,.72,.12,pal.bark);emptyChair(x-1.05,z+.2);emptyChair(x+1.05,z-.2);cone(x,y+2.2,z,1.5,.05,.5,pal.pink,10);branch([x,y+.8,z],[x,y+2.2,z],.03,pal.bark);}
  for(const [x,z,y,s] of [[55,-20,20,1.2],[60,5,22,1],[45,-40,20,.9],[38,10,26,.8]]){
   cone(x,y-6*s,z,.15,3*s,6*s,hex('a5aa9c'),8);cone(x,y,z,3*s,2.8*s,.35,pal.grass,10);
   box(x-.4*s,y+.35,z,1.6*s,1.2*s,1.3*s,hex('e2d8c2'));quad([x-1.3*s,y+.35+1.2*s,z-.75*s],[x+.5*s,y+.35+1.2*s,z-.75*s],[x+.5*s,y+.35+1.9*s,z],[x-1.3*s,y+.35+1.9*s,z],pal.blue);quad([x-1.3*s,y+.35+1.9*s,z],[x+.5*s,y+.35+1.9*s,z],[x+.5*s,y+.35+1.2*s,z+.75*s],[x-1.3*s,y+.35+1.2*s,z+.75*s],hex('8fa7aa'));
   sphere(x+1.4*s,y+1.1*s,z+.5*s,.7*s,.9*s,.7*s,pal.olive,7,4);
   for(let k=0;k<4;k++){const a=k*1.6;branch([x+Math.cos(a)*s,y-1.5*s,z+Math.sin(a)*s],[x+Math.cos(a)*1.2*s,y-4.5*s-k*.4,z+Math.sin(a)*1.2*s],.04,pal.bark);}
  }
- sceneryBatch(17,-15,58);
+ sceneryBatch(hx,hz,60);
 }
 // 4. The pinwheel hill: two small windmills with different sails and curved lavender rows.
 {
@@ -560,24 +576,27 @@ sceneryBatch(3,14,16);
   for(let i=0;i<blades;i++){const a=i*Math.PI*2/blades,px=r=>Math.cos(a)*r,py=r=>Math.sin(a)*r;branch([0,0,0],[px(4.4),py(4.4),0],.05,pal.bark);quad([px(1.2),py(1.2),0],[px(4.4),py(4.4),0],[px(4.4)-Math.sin(a)*1.2,py(4.4)+Math.cos(a)*1.2,0],[px(1.2)-Math.sin(a)*.5,py(1.2)+Math.cos(a)*.5,0],i%2?pal.cream:tint);}
   movingSails.push({...batch(),x,z,r:h+7,offset:new Float32Array([x,hub,z+1.15]),phase});
  };
- pinwheel(-19,-24,7,pal.pink,4,.3);pinwheel(-23.5,-15,6,pal.blue,6,1.4);
- for(let row=0;row<4;row++)for(let k=0;k<26;k++){const a=-.9+k*.07,r=6+row*1.4,x=-15+Math.cos(a+Math.PI)*r,z=-21+Math.sin(a+Math.PI)*r*.6;if(!reserved(x,z)||height(x,z)<1.5)continue;const y=height(x,z);tri([x-.18,y,z],[x,y+.55,z],[x+.18,y,z],row%2?pal.purple:hex('c2b3cf'));tri([x,y,z-.18],[x,y+.55,z],[x,y,z+.18],row%2?pal.purple:hex('c2b3cf'));}
- sceneryBatch(-21,-20,9);
+ const [px,pz]=PINWHEELS;pinwheel(px,pz-CELL,7,pal.pink,4,.3);pinwheel(px,pz+CELL,6,pal.blue,6,1.4);
+ // Curved lavender rows on the slope east of the windmills.
+ for(let row=0;row<4;row++)for(let k=0;k<30;k++){const a=-.9+k*.06,r=5+row*1.5,x=px+CELL*1.7+Math.cos(a+Math.PI)*r,z=pz+Math.sin(a+Math.PI)*r*.9;if(!reserved(x,z)||height(x,z)<1.5)continue;const y=height(x,z);tri([x-.18,y,z],[x,y+.55,z],[x+.18,y,z],row%2?pal.purple:hex('c2b3cf'));tri([x,y,z-.18],[x,y+.55,z],[x,y,z+.18],row%2?pal.purple:hex('c2b3cf'));}
+ sceneryBatch(px+CELL*.5,pz,CELL*2);
 }
 // 5. The sky terraces: a water channel follows the terrace line, with two sluice gates and a plank bridge.
 {
  const water=hex('a8c8c9');let last=null;
- for(let x=17;x<=47;x+=1.5){const z=-65.4+Math.sin(x*.25)*.45,y=height(x,z);if(y<1){last=null;continue;}const p=[x,y+.07,z];if(last){quad([last[0],last[1],last[2]-.35],[p[0],p[1],p[2]-.35],[p[0],p[1],p[2]+.35],[last[0],last[1],last[2]+.35],water);box((last[0]+p[0])/2,Math.min(last[1],p[1])-.12,last[2]+.45,1.5,.22,.12,hex('b8b9a8'));}last=p;}
+ for(let x=17;x<=47;x+=1.5){const z=-65.4+Math.sin(x*.25)*.45,y=height(x,z);if(y<1){last=null;continue;}const p=[x,y+.07,z];if(last)quad([last[0],last[1],last[2]-.35],[p[0],p[1],p[2]-.35],[p[0],p[1],p[2]+.35],[last[0],last[1],last[2]+.35],water);last=p;}
+ for(let x=17;x<=45.5;x+=1.5){const z=-65.4+Math.sin((x+.75)*.25)*.45;if(height(x,z)<1||height(x+1.5,z)<1)continue;box(x+.75,Math.min(height(x,z),height(x+1.5,z))-.05,z+.45,1.5,.22,.12,hex('b8b9a8'));}
+ sceneryBatch(32,-66,20,true);
  for(const gx of [26,39.5]){const gz=-65.4+Math.sin(gx*.25)*.45,gy=height(gx,gz);for(const d of [-.5,.5])box(gx,gy,gz+d,.14,1,.14,pal.bark);box(gx,gy+.35,gz,.12,.55,1,hex('8d8a78'));}
  {const bz=-65.4+Math.sin(36*.25)*.45;box(36,height(36,bz)+.12,bz,1.6,.1,1.4,pal.bark);}
  sceneryBatch(32,-66,20);
 }
 // 6. The singing gate: two stacked rock pillars and an arch over the north road, with wind-cut spires around.
 {
- const x=-10,z=-28.5,y=height(x,z);
+ const [x,z]=WINDGATE,y=height(x,z);
  for(const s of [-1,1]){const lx=x+s*3.2,ly=height(lx,z);for(let k=0;k<4;k++)sphere(lx+s*.08*k,ly+.9+k*1.3,z+(k%2?.18:-.18),1.25-k*.07,.9,1.1,hex(k%2?'9aa39c':'aeb3a6'),8,4);addCircle(lx,z,1.1,'windgate');}
  for(let k=0;k<=8;k++){const a=Math.PI*k/8;sphere(x-Math.cos(a)*3.2,y+5.5+Math.sin(a)*1.7,z,.95,.72,1,hex(k%2?'a4aca3':'b6b9ab'),7,4);}
- for(const [dx,dz,h] of [[-6,-4,4.2],[6.5,2,5],[-5.5,5,3.2],[5.5,-5,3.6]]){const p=spot(x+dx,z+dz);if(!p)continue;cone(p[0],height(p[0],p[1]),p[1],.85,.12,h,hex('a2aaa2'),6);addCircle(p[0],p[1],.7,'wind-spire');}
+ for(const [dx,dz,h] of [[-6,-4,4.2],[6.5,2,5],[-5.5,5,3.2],[5.5,-5,3.6]]){const p=spot(x+dx,z+dz);if(!p||routeDistance(p[0],p[1])<2)continue;cone(p[0],height(p[0],p[1]),p[1],.85,.12,h,hex('a2aaa2'),6);addCircle(p[0],p[1],.7,'wind-spire');}
  sceneryBatch(x,z,14);
 }
 // 7. The snow-ridge cliff: low parapet stones along the headland's edge face the far snow ridge.
@@ -587,10 +606,11 @@ sceneryBatch(3,14,16);
 }
 // 8. The blue far meadow: white flowers, a still pond with a stone rim, and three tall pale stones for distance.
 {
- for(let i=0;i<620;i++){const x=vrnd(-30,6),z=vrnd(-94,-66),y=height(x,z);if(y<1.2||routeDistance(x,z)<1.9||Math.hypot(x+10,z+73.5)<3)continue;const s=vrnd(.16,.34),c=i%4?pal.cream:hex('c9d8e4');tri([x-.1,y,z],[x,y+s,z],[x+.1,y,z],hex('a8b99d'));sphere(x,y+s,z,.08,.05,.08,c,5,3);}
- flatDisc(-10,-73.5,2.4,.06,hex('a9cdd2'),14);for(let k=0;k<12;k++){const a=k/12*Math.PI*2,px=-10+Math.cos(a)*2.55,pz=-73.5+Math.sin(a)*2.55;sphere(px,height(px,pz)+.08,pz,.38,.16,.3,pal.stone,6,3);}addCircle(-10,-73.5,2.3,'pond');
+ for(let i=0;i<620;i++){const x=vrnd(-30,6),z=vrnd(-94,-66),y=height(x,z);if(y<1.2||routeDistance(x,z)<1.9||Math.hypot(x-POND[0],z-POND[1])<3)continue;const s=vrnd(.16,.34),c=i%4?pal.cream:hex('c9d8e4');tri([x-.1,y,z],[x,y+s,z],[x+.1,y,z],hex('a8b99d'));sphere(x,y+s,z,.08,.05,.08,c,5,3);}
+ const [qx,qz]=POND;for(let k=0;k<12;k++){const a=k/12*Math.PI*2,px=qx+Math.cos(a)*2.55,pz=qz+Math.sin(a)*2.55;sphere(px,height(px,pz)+.08,pz,.38,.16,.3,pal.stone,6,3);}addCircle(qx,qz,2.3,'pond');
  for(const [mx,mz,h] of [[-5.5,-91.5,3.2],[-23.5,-82.5,2.6],[-1,-78,2.2]]){const p=spot(mx,mz);if(!p)continue;box(p[0],height(p[0],p[1])-.1,p[1],.55,h,.4,hex('e3e0d4'));addCircle(p[0],p[1],.4,'menhir');}
  sceneryBatch(-12,-80,25);
+ flatDisc(qx,qz,2.4,.06,hex('a9cdd2'),14);sceneryBatch(qx,qz,3,true);
 }
 // 9. The meadow road: tall grass with seed heads rides the hill beside the road.
 {
@@ -601,7 +621,7 @@ sceneryBatch(3,14,16);
 {
  for(const [wx,wz] of [[26,-51],[21.5,-46.5],[30.5,-51]]){const p=spot(wx,wz);if(!p)continue;const [x,z]=p,y=height(x,z);branch([x,y,z],[x+.2,y+3.3,z],.16,pal.bark);sphere(x+.2,y+3.6,z,1.3,.7,1.3,hex('9fb59a'),8,4);
   for(let k=0;k<16;k++){const a=k/16*Math.PI*2,r=vrnd(.8,1.5),top=[x+.2+Math.cos(a)*r*.6,y+3.7,z+Math.sin(a)*r*.6];branch(top,[x+.2+Math.cos(a)*r,y+vrnd(1,1.8),z+Math.sin(a)*r],.035,k%3?hex('a9bf98'):hex('b9b7cf'));}addCircle(x,z,.25,'willow');}
- for(let i=0;i<40;i++){const x=vrnd(28,44),z=vrnd(-53,-41);if(height(x,z)>-.35)continue;flatDisc(x,z,vrnd(.5,1.3),.0,[hex('cfc7df'),hex('bcd6d1'),hex('dccbd2'),hex('c3d7b6')][i%4],7);}
+ for(let i=0;i<40;i++){const x=vrnd(28,44),z=vrnd(-53,-41);if(height(x,z)>-.35)continue;seaDisc(x,z,vrnd(.5,1.3),[hex('cfc7df'),hex('bcd6d1'),hex('dccbd2'),hex('c3d7b6')][i%4],7);}
  sceneryBatch(32,-48,18);
 }
 // 11. A Sunday shore: still figures with parasols, round clipped trees, boats, and ground painted in dots.
@@ -610,12 +630,13 @@ sceneryBatch(3,14,16);
  for(const [tx2,tz2] of [[39.5,-64.5],[30.5,-60]]){const p=spot(tx2,tz2);if(!p)continue;const y=height(p[0],p[1]);branch([p[0],y,p[1]],[p[0],y+2.2,p[1]],.1,pal.bark);sphere(p[0],y+3,p[1],1.15,1.15,1.15,hex('8fa48a'),10,6);addCircle(p[0],p[1],.12,'tree');}
  for(const [bx,bz,c] of [[40,-50,pal.pink],[46,-48.5,pal.cream]]){box(bx,.02,bz,.9,.35,2.4,hex('a38f78'));branch([bx,.35,bz],[bx,2.6,bz],.03,pal.bark);tri([bx,.6,bz],[bx,2.5,bz],[bx,.6,bz+1.4],c);}
  const dots=[hex('d9a7a0'),hex('9fb5c9'),hex('e1cf98'),hex('a5c09a'),hex('c4a8cf')];
- for(let i=0;i<700;i++){const x=vrnd(32,47),z=vrnd(-66,-56),y=height(x,z);if(y<.5||routeDistance(x,z)<1.7)continue;const d=.09;quad([x-d,y+.03,z-d],[x+d,y+.03,z-d],[x+d,y+.03,z+d],[x-d,y+.03,z+d],dots[i%5]);}
  sceneryBatch(40,-58,16);
+ for(let i=0;i<700;i++){const x=vrnd(32,47),z=vrnd(-66,-56),y=height(x,z);if(y<.5||routeDistance(x,z)<1.7)continue;const d=.09;quad([x-d,y+.03,z-d],[x+d,y+.03,z-d],[x+d,y+.03,z+d],[x-d,y+.03,z+d],dots[i%5]);}
+ sceneryBatch(40,-61,12,true);
 }
 // 12. The sky shallows: pale plates on the shallow sea either side of the sandbar take the colour of the sky.
 {
- for(let x=-47;x<-16;x+=2.2)for(let z=9;z<35;z+=2.2){const h=height(x+1.1,z+1.1);if(h>-.03||h<-1.9)continue;const c=vrnd(0,1)<.5?hex('cfe1df'):hex('d9e8e5');quad([x,.035,z],[x,.035,z+2.2],[x+2.2,.035,z+2.2],[x+2.2,.035,z],c);}
+ for(let x=-47;x<-16;x+=2.2)for(let z=9;z<35;z+=2.2){const h=height(x+1.1,z+1.1);if(h>-.03||h<-1.9)continue;const c=vrnd(0,1)<.5?hex('cfe1df'):hex('d9e8e5');quad([x,SEA_PAINT,z],[x,SEA_PAINT,z+2.2],[x+2.2,SEA_PAINT,z+2.2],[x+2.2,SEA_PAINT,z],c);}
  for(const [px,pz] of [[-38,17],[-27,27],[-42,26]]){branch([px,-.6,pz],[px,1.3,pz],.06,pal.bark);}
  sceneryBatch(-31,22,24);
 }
@@ -686,7 +707,7 @@ function render(){
  gl.uniform1f(loc.uFogScale,.32);draw(mountains);gl.uniform1f(loc.uFogScale,1);
  draw(distant);draw(sea,DRAW_ORIGIN,0,1);for(const chunk of terrainChunks)if(visible(chunk))draw(chunk);gl.enable(gl.POLYGON_OFFSET_FILL);gl.polygonOffset(-1,-1);for(const chunk of roadChunks)if(visible(chunk))draw(chunk);gl.disable(gl.POLYGON_OFFSET_FILL);draw(foam);
  if(visible(WORLD_SCENERY_BOUNDS,650))draw(world);
- for(const chunk of scenery)if(visible(chunk))draw(chunk);draw(clouds);
+ for(const chunk of scenery){if(!visible(chunk))continue;if(chunk.decal){gl.enable(gl.POLYGON_OFFSET_FILL);gl.polygonOffset(-2,-2);draw(chunk);gl.disable(gl.POLYGON_OFFSET_FILL);}else draw(chunk);}draw(clouds);
  for(const sail of movingSails)if(visible(sail))draw(sail,sail.offset,0,0,reduced?sail.phase:time*.065+sail.phase);
  for(const flock of seabirds){
   if(!visible(flock,550))continue;
@@ -726,7 +747,7 @@ function updateRegion(dt){
 function inputHeld(){return GRID_MODE?gridGesture.held||keys.size>0:gestures.held||keys.size>0;}
 // The newest held key wins; a held slide repeats; a buffered press (key or tap) is never lost while a step plays.
 function heldCommand(){
- if(gridGesture.held&&gridGesture.command)return gridGesture.command;
+ if(gridGesture.held&&gridGesture.command)return gridGesture.available();
  for(let i=keyOrder.length-1;i>=0;i--){const c=keyCommand(keyOrder[i]);if(c)return c;}
  return null;
 }
@@ -742,7 +763,9 @@ function gridUpdate(dt){
   // A fresh press, a turn or a new direction may bump again.
   const where=walker.i+','+walker.j+','+walker.heading;
   if(command&&!(command===bumpedCommand&&where===bumpedAt&&!fresh)){
-   const result=walker.command(command,{quick:keys.has('ShiftLeft')||keys.has('ShiftRight'),hold:command===held});
+   // One-shot touch commands (a step back, an about-face) act once per slide and always ease to a stop.
+   const result=walker.command(command,{quick:keys.has('ShiftLeft')||keys.has('ShiftRight'),hold:command===held&&!(gridGesture.held&&ONE_SHOT.has(command))});
+   if(result&&!fresh&&gridGesture.held)gridGesture.take(command);
    if(result==='step'){const [x,z]=walker.center(walker.i,walker.j);footstep(surfaceAt(x,z),CELL/STEP_SECONDS);}
    if(result==='blocked'){bumpedCommand=command;bumpedAt=where;}else if(result){bumpedCommand=null;}
   }
@@ -765,12 +788,13 @@ function update(dt){
   const target=Math.atan2(player.x-npc.x,player.z-npc.z),diff=Math.atan2(Math.sin(target-npc.angle),Math.cos(target-npc.angle));
   npc.angle+=diff*(1-Math.exp(-dt*1.5));
   const words=npc.lines[npc.index%npc.lines.length];
-  if(dist<GREETING_RADIUS&&!npc.encounter&&time-npc.last>23&&showNotice('greeting',npc.name,npc.name,words,readingSeconds(words))){
+  if(dist<(GRID_MODE?Math.max(GREETING_RADIUS,CELL+.8):GREETING_RADIUS)&&!npc.encounter&&time-npc.last>23&&showNotice('greeting',npc.name,npc.name,words,readingSeconds(words))){
    lastGreetingDistance=dist;npc.last=time;npc.encounter=true;npc.index++;chime();
   }
  }
  for(const [name,en,x,z,r] of landmarks){
-  if(Math.hypot(player.x-x,player.z-z)>=r)continue;
+  // On the grid a place is announced from any cell that touches it, even a small one.
+  if(Math.hypot(player.x-x,player.z-z)>=(GRID_MODE?Math.max(r,CELL*.8):r))continue;
   shownPlaces.add(name);
   if(!announcedPlaces.has(name)&&showNotice('place',name,name,en,3.8))announcedPlaces.add(name);
  }
@@ -830,7 +854,7 @@ function finishPointer(e){
 addEventListener('pointerup',finishPointer,true);addEventListener('pointercancel',finishPointer,true);
 canvas.addEventListener('lostpointercapture',e=>{if(e.pointerId===(GRID_MODE?gridGesture.id:gestures.id))resetInput();});
 canvas.addEventListener('contextmenu',e=>e.preventDefault());
-const gameKeys=new Set(['KeyW','KeyA','KeyS','KeyD','KeyQ','KeyE','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','ShiftLeft','ShiftRight']);if(GRID_MODE)gameKeys.add('KeyM');
+const gameKeys=new Set(['KeyW','KeyA','KeyS','KeyD','KeyQ','KeyE','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','ShiftLeft','ShiftRight']);if(GRID_MODE){gameKeys.add('KeyM');gameKeys.add('KeyX');}
 addEventListener('keydown',e=>{
  if(!started&&e.code==='Enter'){begin();return;}
  if(started&&e.code==='KeyH'&&!e.repeat){e.preventDefault();if(paused)closeBook();else openBook();return;}
@@ -987,9 +1011,9 @@ function drawAutomap(){
 if(GRID_MODE){
  document.body.classList.add('grid-mode');
  canvas.setAttribute('aria-label',canvas.getAttribute('aria-label').split('。')[0]+'。マス目を一つずつ歩きます。W/Sで一マス前後、A/Dで横へ一マス、Q/Eまたは左右矢印で90度向きを変えます。画面下半分で上下に滑らせると前後、左右にはじくと向きを変え、押したまま左右に滑らせると横歩きします。軽く触れると一マス進みます。');
- const notes=document.querySelector('.notes p');if(notes)notes.innerHTML='マス目をひとつずつ歩く。画面の下半分で、上へ滑らせて前進、下で後退。<br>左右にはじくと向き替え、押したまま左右でカニ歩き。軽く触れると一マス。<br>PCは W A S D · Q E · ← →。';
+ const notes=document.querySelector('.notes p');if(notes)notes.innerHTML='マス目をひとつずつ歩く。下半分で上へ滑らせて前進、下へはじくと1歩下がる。<br>左右にはじくと向き替え。少し押してから左右でカニ歩き、下で振り返る。<br>軽く触れると一マス。PCは W A S D · Q E · ← → · X。';
  const book=document.querySelector('.book-controls');
- if(book)book.innerHTML='<h3>マス目を歩く</h3><p>画面の下半分で上へ滑らせると前へ。保持すると歩き続けます。<br>下へ滑らせると、前を向いたまま後ろへ。<br>左右にさっとはじくと90度の向き替え。<br>少し押したまま（歩きながらでも）左右へ滑らせるとカニ歩き。<br>軽く触れると一マス進みます。</p><p class="keyboard-notes">PC：W / S で前後 ／ A / D で横へ一マス ／ Q E ・ ← → で向き替え<br>Shift で早足 ／ M で地図 ／ H でしおり ／ Esc で入力解除</p>';
+ if(book)book.innerHTML='<h3>マス目を歩く</h3><p>画面の下半分で上へ滑らせると前へ。保持すると歩き続けます。<br>下へさっとはじくと、前を向いたまま1歩下がります。<br>少し押したまま下へ滑らせると、振り返ります。<br>左右にさっとはじくと90度の向き替え。<br>少し押したまま（歩きながらでも）左右へ滑らせるとカニ歩き。<br>軽く触れると一マス進みます。</p><p class="keyboard-notes">PC：W / S で前後 ／ A / D で横へ一マス ／ Q E ・ ← → で向き替え ／ X で振り返る<br>Shift で早足 ／ M で地図 ／ H でしおり ／ Esc で入力解除</p>';
 }
 function begin(){if(started||contextLost)return;started=true;notices.clear();document.body.classList.add('playing');canvas.focus();audio();}
 const beginButton=document.querySelector('#begin');beginButton.addEventListener('click',begin);beginButton.disabled=false;beginButton.removeAttribute('aria-busy');

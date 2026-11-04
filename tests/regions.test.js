@@ -16,7 +16,7 @@ test('twelve compact places on the small island, each with its own track and sky
   assert.ok(Math.abs(r.x)<=50&&r.z<=30&&r.z>=-110,r.id);
   assert.ok(height(r.x,r.z)>-1,r.id);
  }
- assert.equal(regionAt(8,30).id,'shore');assert.equal(regionAt(-19,5).id,'greenhouse');
+ assert.equal(regionAt(8,30).id,'shore');assert.equal(regionAt(-16,9).id,'greenhouse');
 });
 
 test('a region change holds for a moment, and crossing an edge back and forth never flickers',()=>{
@@ -24,11 +24,11 @@ test('a region change holds for a moment, and crossing an edge back and forth ne
  assert.equal(t.update(g.x,g.z,.5),null);assert.equal(t.current.id,'shore');
  assert.equal(t.update(g.x,g.z,.3).id,'greenhouse');
  // Just outside the edge is still inside thanks to the 15% margin.
- assert.equal(t.update(g.x+g.r*1.1,g.z,5),null);assert.equal(t.current.id,'greenhouse');
+ assert.equal(t.update(g.x-g.r*1.1,g.z,5),null);assert.equal(t.current.id,'greenhouse');
  // Bouncing across the outer edge faster than the delay keeps the current region.
- for(let i=0;i<20;i++){t.update(g.x+g.r*1.3,g.z,.3);t.update(g.x,g.z,.3);}
+ for(let i=0;i<20;i++){t.update(g.x-g.r*1.3,g.z,.3);t.update(g.x,g.z,.3);}
  assert.equal(t.current.id,'greenhouse');
- t.update(g.x+g.r*1.3,g.z,.4);assert.equal(t.update(g.x+g.r*1.3,g.z,.4).id,'shore');
+ t.update(g.x-g.r*1.3,g.z,.4);assert.equal(t.update(g.x-g.r*1.3,g.z,.4).id,'shore');
 });
 
 test('every piece is a complete, original arrangement: whole bars, its own melody, meter and instruments',()=>{
