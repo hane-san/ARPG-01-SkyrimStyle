@@ -44,6 +44,7 @@ jobs:
       - run: python tests/world-check.py
       - run: python tests/sky-check.py
       - run: python tests/journey-check.py
+      - run: python tests/grid-check.py
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

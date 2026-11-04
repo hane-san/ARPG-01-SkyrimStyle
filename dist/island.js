@@ -1,6 +1,9 @@
 const {height,walkable,clamp,smooth,routes,landmarks,distanceToRoute,WORLD_BOUNDS,monuments,expeditionRoute,valleyRoute,easternRoute,saltRoute,MOON_DIRECTION}=await import('./terrain.js'+new URL(import.meta.url).search);
 const {CRUISE_SPEED,footStride,nearPlaneMargin,CollisionWorld,circleCollider,boxCollider,GestureInput,createMotionState,resetMotion,stepMotion,readMovementInput}=await import('./movement.js'+new URL(import.meta.url).search);
 const {journeyScenes,landscapeColor,readingSeconds,JourneyNotices}=await import('./journey.js'+new URL(import.meta.url).search);
+const {CELL,STEP_SECONDS,QUICK_STEP_SECONDS,HEADING_NAMES,GridWalker,GridGesture,keyCommand,automapCells}=await import('./grid.js'+new URL(import.meta.url).search);
+// Opt-in dungeon-crawler travel: the same island, walked one grid cell at a time. Free walking stays the default.
+const GRID_MODE=new URLSearchParams(location.search).get('grid')==='1';
 const canvas=document.querySelector('#world'),gl=canvas.getContext('webgl',{antialias:true,alpha:false,powerPreference:'high-performance'});
 if(!gl){document.querySelector('#error').hidden=false;document.querySelector('#begin').disabled=true;throw Error('WebGL unavailable');}
 const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -456,10 +459,14 @@ for(const [x,z,y] of [[-66,14,30],[-345,-330,65],[1105,-680,85]])seabirds.push({
 const RUN_SPEED=CRUISE_SPEED,GREETING_RADIUS=4.8;
 const collisionWorld=new CollisionWorld(obstacles,{height,walkable});
 const player=createMotionState(8,30,.25);player.y=height(8,30)+1.65;
+// Grid cells are 3 m, centred on the landing; the walker faces north up the island.
+const walker=GRID_MODE?new GridWalker(collisionWorld,{origin:[8,30],cell:CELL,heading:0}):null;
+if(walker){player.yaw=walker.yaw;player.y=walker.y;}
 const camera={x:player.x,y:player.y,z:player.z,yaw:player.yaw};
 let previous={...camera},accumulator=0;
 function resetCameraHistory(){Object.assign(camera,{x:player.x,y:player.y,z:player.z,yaw:player.yaw});Object.assign(previous,camera);accumulator=0;}
 
+let gridGesture=new GridGesture(),pendingCommand=null,keyOrder=[],automapKey=null,automapShown=true;
 let started=false,paused=false,muted=false,contextLost=false,time=0,last=performance.now(),gestures=new GestureInput(),keys=new Set(),shownPlaces=new Set(),lastGreetingDistance=null;
 const notices=new JourneyNotices(),seenScenes=new Set(),sceneDwell=new Map();
 const placeNode=document.querySelector('#place'),greetingNode=document.querySelector('#greeting'),travelBook=document.querySelector('#travel-book');
@@ -508,10 +515,31 @@ function paintNotices(){
  else{document.querySelector('#speaker').textContent=noticeContent.title;document.querySelector('#words').textContent=noticeContent.words;}
 }
 const announcedPlaces=new Set();
+function inputHeld(){return GRID_MODE?gridGesture.held||keys.size>0:gestures.held||keys.size>0;}
+// The newest held key wins; a held slide repeats; a buffered press (key or tap) is never lost while a step plays.
+function heldCommand(){
+ if(gridGesture.held&&gridGesture.command)return gridGesture.command;
+ for(let i=keyOrder.length-1;i>=0;i--){const c=keyCommand(keyOrder[i]);if(c)return c;}
+ return null;
+}
+function gridUpdate(dt){
+ walker.update(dt);
+ if(!walker.busy){
+  const command=pendingCommand||heldCommand();pendingCommand=null;
+  if(command&&walker.command(command,{quick:keys.has('ShiftLeft')||keys.has('ShiftRight')})==='step'){
+   const [x,z]=walker.center(walker.i,walker.j);footstep(surfaceAt(x,z),CELL/STEP_SECONDS);
+  }
+ }
+ player.x=walker.x;player.z=walker.z;player.y=walker.y;player.yaw=walker.yaw;player.travelled=walker.travelled;player.actualSpeed=walker.speed;
+ drawAutomap();
+}
 function update(dt){
- const input=readMovementInput(gestures.held?gestures.value:null,keys);
- stepMotion(player,input,dt,collisionWorld);
- updateFootsteps(player.travelled,dt);
+ if(GRID_MODE)gridUpdate(dt);
+ else{
+  const input=readMovementInput(gestures.held?gestures.value:null,keys);
+  stepMotion(player,input,dt,collisionWorld);
+  updateFootsteps(player.travelled,dt);
+ }
  for(const npc of npcs){
   const dist=Math.hypot(player.x-npc.x,player.z-npc.z);
   if(dist>14){npc.encounter=false;continue;}
@@ -531,7 +559,7 @@ function update(dt){
   if(seenScenes.has(scene.id))continue;
   const dx=scene.x-player.x,dz=scene.z-player.z,dist=Math.hypot(dx,dz);
   const facing=(-Math.sin(player.yaw)*dx-Math.cos(player.yaw)*dz)/Math.max(dist,.01);
-  if(dist<scene.radius&&facing>.45&&player.actualSpeed<.5&&!gestures.held&&keys.size===0){
+  if(dist<scene.radius&&facing>.45&&player.actualSpeed<.5&&!inputHeld()&&!(walker&&walker.action)){
    const dwell=(sceneDwell.get(scene.id)||0)+dt;sceneDwell.set(scene.id,dwell);
    if(dwell>1.6&&showNotice('scene',scene.id,scene.name,scene.words,readingSeconds(scene.words)))seenScenes.add(scene.id);
   }else sceneDwell.delete(scene.id);
@@ -550,8 +578,10 @@ function frame(now){
  render();requestAnimationFrame(frame);
 }requestAnimationFrame(frame);
 
-function stopMovement(){resetMotion(player);resetCameraHistory();footDistance=0;feetMoving=false;}
+// Grid mode: input is cleared, and a step already under way lands on its cell (at most 0.21 s); nothing repeats.
+function stopMovement(){if(GRID_MODE){pendingCommand=null;keyOrder=[];return;}resetMotion(player);resetCameraHistory();footDistance=0;feetMoving=false;}
 function settleInput(){
+ if(GRID_MODE)return;
  const i=readMovementInput(gestures.held?gestures.value:null,keys);
  if(!i.turn)player.yawRate=0;
  if(!i.forward&&!i.strafe){player.localForward=player.localSide=player.vx=player.vz=player.actualSpeed=player.travelled=player.blockedFor=player.runSeconds=player.surge=0;resetCameraHistory();footDistance=0;feetMoving=false;}
@@ -559,21 +589,29 @@ function settleInput(){
 function releaseCapture(id){if(id!==null&&canvas.hasPointerCapture(id))canvas.releasePointerCapture(id);}
 canvas.addEventListener('pointerdown',e=>{
  if(!started||paused||contextLost)return;
+ if(GRID_MODE){
+  if(!gridGesture.begin(e,canvas.getBoundingClientRect(),e.timeStamp/1000))return;
+  e.preventDefault();canvas.setPointerCapture(e.pointerId);canvas.focus({preventScroll:true});resumeAudio();return;
+ }
  const old=gestures.id,claimed=gestures.begin(e,canvas.getBoundingClientRect());
  if(old!==null&&!gestures.held){stopMovement();releaseCapture(old);}
  if(!claimed)return;
  e.preventDefault();canvas.setPointerCapture(e.pointerId);canvas.focus({preventScroll:true});resumeAudio();
 });
 canvas.addEventListener('pointermove',e=>{
+ if(GRID_MODE){if(gridGesture.move(e))e.preventDefault();return;}
  const wasHeld=gestures.held;
  if(gestures.move(e))e.preventDefault();else if(wasHeld&&!gestures.held)settleInput();
 });
-function finishPointer(e){const owner=gestures.id;if(gestures.end(e)){settleInput();releaseCapture(owner);}}
+function finishPointer(e){
+ if(GRID_MODE){const owner=gridGesture.id,result=gridGesture.end(e,e.timeStamp/1000);if(result){if(result==='tap'&&started&&!paused)pendingCommand='forward';releaseCapture(owner);}return;}
+ const owner=gestures.id;if(gestures.end(e)){settleInput();releaseCapture(owner);}
+}
 // Capture-phase window listeners also see releases outside the canvas after capture was lost.
 addEventListener('pointerup',finishPointer,true);addEventListener('pointercancel',finishPointer,true);
-canvas.addEventListener('lostpointercapture',e=>{if(e.pointerId===gestures.id)resetInput();});
+canvas.addEventListener('lostpointercapture',e=>{if(e.pointerId===(GRID_MODE?gridGesture.id:gestures.id))resetInput();});
 canvas.addEventListener('contextmenu',e=>e.preventDefault());
-const gameKeys=new Set(['KeyW','KeyA','KeyS','KeyD','KeyQ','KeyE','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','ShiftLeft','ShiftRight']);
+const gameKeys=new Set(['KeyW','KeyA','KeyS','KeyD','KeyQ','KeyE','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','ShiftLeft','ShiftRight']);if(GRID_MODE)gameKeys.add('KeyM');
 addEventListener('keydown',e=>{
  if(!started&&e.code==='Enter'){begin();return;}
  if(started&&e.code==='KeyH'&&!e.repeat){e.preventDefault();if(paused)closeBook();else openBook();return;}
@@ -583,12 +621,14 @@ addEventListener('keydown',e=>{
   // A physically held key can keep repeating after a dialog or blur cleared it.
   // Only a fresh press may start movement again.
   if(e.repeat&&!keys.has(e.code))return;
+  if(GRID_MODE&&!e.repeat){const command=keyCommand(e.code);if(command){pendingCommand=command;keyOrder=keyOrder.filter(k=>k!==e.code).concat(e.code);}}
   keys.add(e.code);resumeAudio();
  }
+ if(GRID_MODE&&started&&!paused&&e.code==='KeyM'&&!e.repeat){automapShown=!automapShown;automapKey=null;drawAutomap();}
  if(e.code==='Escape')resetInput();
 });
-addEventListener('keyup',e=>{keys.delete(e.code);settleInput();});
-function resetInput(){keys.clear();const owner=gestures.reset();stopMovement();releaseCapture(owner);}
+addEventListener('keyup',e=>{keys.delete(e.code);keyOrder=keyOrder.filter(k=>k!==e.code);settleInput();});
+function resetInput(){keys.clear();const owner=GRID_MODE?gridGesture.reset():gestures.reset();stopMovement();releaseCapture(owner);}
 addEventListener('blur',resetInput);addEventListener('orientationchange',resetInput);
 canvas.addEventListener('blur',resetInput);
 function suspendAudio(){if(audioCtx&&audioCtx.state!=='closed')audioCtx.suspend().catch(()=>{});}
@@ -681,6 +721,31 @@ function updateFootsteps(distance,dt){
  if(footDistance>=stride){footDistance%=stride;footstep(surfaceAt(player.x,player.z),speed);}
 }
 function chime(){if(!audioCtx||audioCtx.state!=='running')return;for(const [i,f] of [523.25,783.99].entries()){const o=audioCtx.createOscillator(),g=audioCtx.createGain(),t=audioCtx.currentTime+i*.15;o.type='sine';o.frequency.value=f;g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(.035,t+.03);g.gain.exponentialRampToValueAtTime(.0001,t+2);o.connect(g);g.connect(master);o.start(t);o.stop(t+2);}}
+// A small hand-drawn automap of visited cells, as in a dungeon crawler. North is always up.
+const automap=document.querySelector('#automap'),automapCtx=automap?.getContext('2d');
+function drawAutomap(){
+ if(!walker||!automapCtx)return;
+ const key=walker.i+','+walker.j+','+walker.heading+','+walker.visited.size+','+automapShown;
+ if(key===automapKey)return;automapKey=key;
+ automap.hidden=!automapShown;if(!automapShown)return;
+ const ratio=Math.min(devicePixelRatio||1,2),size=112,radius=7,unit=size/(radius*2+1);
+ if(automap.width!==size*ratio){automap.width=automap.height=size*ratio;}
+ const c=automapCtx;c.setTransform(ratio,0,0,ratio,0,0);c.clearRect(0,0,size,size);
+ c.fillStyle='#eef0e4b8';c.fillRect(0,0,size,size);
+ c.fillStyle='#8fa596';
+ for(const [di,dj] of automapCells(walker,radius))c.fillRect((di+radius)*unit+.5,(dj+radius)*unit+.5,unit-1,unit-1);
+ const cx=(radius+.5)*unit,cy=(radius+.5)*unit,a=walker.heading*Math.PI/2;
+ c.save();c.translate(cx,cy);c.rotate(a);c.fillStyle='#2f4a40';c.beginPath();c.moveTo(0,-unit*.62);c.lineTo(unit*.45,unit*.42);c.lineTo(-unit*.45,unit*.42);c.closePath();c.fill();c.restore();
+ c.fillStyle='#2f4a40';c.font='10px sans-serif';c.textAlign='left';c.fillText('N',4,12);
+ automap.setAttribute('aria-label','地図：'+HEADING_NAMES[walker.heading]+'を向いています。歩いたマス '+walker.visited.size);
+}
+if(GRID_MODE){
+ document.body.classList.add('grid-mode');
+ canvas.setAttribute('aria-label','凪の島（マス目移動）。W/Sで一マス前後、A/Dで横へ一マス、Q/Eまたは左右矢印で90度向きを変えます。画面下半分で上下に滑らせると前後、左右で向きを変えます。軽く触れると一マス進みます。');
+ const notes=document.querySelector('.notes p');if(notes)notes.innerHTML='マス目をひとつずつ歩く試作版。画面の下半分で、上へ滑らせて前進、<br>下で後退、左右で90度の向き替え。軽く触れると一マス。PCは W A S D · Q E · ← →。';
+ const book=document.querySelector('.book-controls');
+ if(book)book.innerHTML='<h3>マス目を歩く</h3><p>画面の下半分で上へ滑らせると一マス前へ。<br>保持すると歩き続けます。下で後退、左右で90度の向き替え。<br>軽く触れると一マス進みます。</p><p class="keyboard-notes">PC：W / S で前後 ／ A / D で横へ一マス ／ Q E ・ ← → で向き替え<br>Shift で早足 ／ M で地図 ／ H でしおり ／ Esc で入力解除</p>';
+}
 function begin(){if(started||contextLost)return;started=true;notices.clear();document.body.classList.add('playing');canvas.focus();audio();}
 const beginButton=document.querySelector('#begin');beginButton.addEventListener('click',begin);beginButton.disabled=false;beginButton.removeAttribute('aria-busy');
 // A lost GPU context leaves a blank island: release input, stop footsteps, greetings and sound, and ask for a reload.
@@ -689,4 +754,4 @@ canvas.addEventListener('webglcontextlost',()=>{
  const error=document.querySelector('#error');error.textContent='島を読み込めませんでした。ページを開き直してください。';error.hidden=false;
 });
 // Minimal diagnostic state for development; no interface is added during play.
-window.nagi={get release(){return document.querySelector('meta[name="nagi-release"]')?.content||'local'},get position(){return{x:player.x,z:player.z,yaw:player.yaw}},get camera(){return{...camera}},get turningRate(){return player.yawRate},get continuousRun(){return player.runSeconds},get surge(){return player.surge},get collisionChecks(){return collisionWorld.checks},get actualSpeed(){return player.actualSpeed},get blockedFor(){return player.blockedFor},get monuments(){return monuments.length},get renderedVertices(){return drawnVertices},get drawCalls(){return drawCalls},get started(){return started},get speed(){return Math.hypot(player.vx,player.vz)},get dragging(){return gestures.held},get fov(){return CAMERA_FOV},get greetingDistance(){return lastGreetingDistance},get footsteps(){return footstepCount},get audioState(){return audioCtx?.state||'unavailable'},get footSurface(){return lastFootSurface},get worldVertices(){return terrain.count+roadChunks.reduce((n,b)=>n+b.count,0)+world.count+sea.count+scenery.reduce((n,b)=>n+b.count,0)+movingSails.reduce((n,b)=>n+b.count,0)+birdMesh.count},get places(){return [...shownPlaces]},get islanders(){return npcs.length},get greeted(){return npcs.reduce((a,n)=>a+n.index,0)}};
+window.nagi={get release(){return document.querySelector('meta[name="nagi-release"]')?.content||'local'},get position(){return{x:player.x,z:player.z,yaw:player.yaw}},get camera(){return{...camera}},get turningRate(){return player.yawRate},get continuousRun(){return player.runSeconds},get surge(){return player.surge},get collisionChecks(){return collisionWorld.checks},get actualSpeed(){return player.actualSpeed},get blockedFor(){return player.blockedFor},get monuments(){return monuments.length},get renderedVertices(){return drawnVertices},get drawCalls(){return drawCalls},get started(){return started},get speed(){return Math.hypot(player.vx,player.vz)},get dragging(){return gestures.held},get fov(){return CAMERA_FOV},get greetingDistance(){return lastGreetingDistance},get footsteps(){return footstepCount},get audioState(){return audioCtx?.state||'unavailable'},get footSurface(){return lastFootSurface},get worldVertices(){return terrain.count+roadChunks.reduce((n,b)=>n+b.count,0)+world.count+sea.count+scenery.reduce((n,b)=>n+b.count,0)+movingSails.reduce((n,b)=>n+b.count,0)+birdMesh.count},get places(){return [...shownPlaces]},get islanders(){return npcs.length},get greeted(){return npcs.reduce((a,n)=>a+n.index,0)},get grid(){return walker?{i:walker.i,j:walker.j,heading:walker.heading,steps:walker.steps,turns:walker.turns,bumps:walker.bumps,visited:walker.visited.size,busy:walker.busy,automap:!automap.hidden}:null}};
