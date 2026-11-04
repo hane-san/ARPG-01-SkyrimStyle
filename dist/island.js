@@ -730,17 +730,23 @@ function heldCommand(){
  for(let i=keyOrder.length-1;i>=0;i--){const c=keyCommand(keyOrder[i]);if(c)return c;}
  return null;
 }
-let activeCommand=null;
+let activeCommand=null,bumpedCommand=null,bumpedAt=null;
 function gridUpdate(dt){
  const held=heldCommand();
  // Letting go (or changing direction) mid-step slows to a stop on the cell being entered.
  if(held!==activeCommand)walker.easeOut();
  walker.update(dt);
  if(!walker.busy){
-  const command=pendingCommand||held;pendingCommand=null;activeCommand=command;
-  if(command&&walker.command(command,{quick:keys.has('ShiftLeft')||keys.has('ShiftRight'),hold:command===held})==='step'){
-   const [x,z]=walker.center(walker.i,walker.j);footstep(surfaceAt(x,z),CELL/STEP_SECONDS);
+  const fresh=pendingCommand,command=fresh||held;pendingCommand=null;activeCommand=command;
+  // Holding against a wall bumps once, not over and over: a repeated nudge reads as camera shake.
+  // A fresh press, a turn or a new direction may bump again.
+  const where=walker.i+','+walker.j+','+walker.heading;
+  if(command&&!(command===bumpedCommand&&where===bumpedAt&&!fresh)){
+   const result=walker.command(command,{quick:keys.has('ShiftLeft')||keys.has('ShiftRight'),hold:command===held});
+   if(result==='step'){const [x,z]=walker.center(walker.i,walker.j);footstep(surfaceAt(x,z),CELL/STEP_SECONDS);}
+   if(result==='blocked'){bumpedCommand=command;bumpedAt=where;}else if(result){bumpedCommand=null;}
   }
+  if(!held&&!fresh)bumpedCommand=null;
  }
  player.x=walker.x;player.z=walker.z;player.y=walker.y;player.yaw=walker.yaw;player.travelled=walker.travelled;player.actualSpeed=walker.speed;
  drawAutomap();

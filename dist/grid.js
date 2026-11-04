@@ -2,14 +2,15 @@
 // No DOM, WebGL or audio. The world supplies walkable(), height() and the swept move() of CollisionWorld.
 // 4.5 m cells. A held walk glides through cells at a constant 18.75 m/s (Shift: about 26 m/s);
 // it eases in from rest and eases out when the finger or key lets go, instead of pausing at every cell.
-export const CELL=4.5,GRID_ORIGIN=Object.freeze([8,30]),STEP_SECONDS=.24,QUICK_STEP_SECONDS=.17,TURN_SECONDS=.3,TURN_REPEAT_PAUSE=.28,BUMP_SECONDS=.18,EYE_HEIGHT=1.65;
+export const CELL=4.5,GRID_ORIGIN=Object.freeze([8,30]),STEP_SECONDS=.24,QUICK_STEP_SECONDS=.17,TURN_SECONDS=.3,TURN_REPEAT_PAUSE=.28,BUMP_SECONDS=.26,EYE_HEIGHT=1.65,EYE_SETTLE_SECONDS=.1,EYE_FLOOR=1.4,EYE_SPREAD=2.6;
 // Headings are compass quarters: 0 north (-z), 1 east (+x), 2 south (+z), 3 west (-x).
 export const HEADINGS=Object.freeze([[0,-1],[1,0],[0,1],[-1,0]]);
 export const HEADING_NAMES=Object.freeze(['北','東','南','西']);
 export const headingYaw=h=>-((h%4+4)%4)*Math.PI/2;
 export function nearestHeading(yaw){return ((Math.round(-yaw/(Math.PI/2))%4)+4)%4;}
 const wrapQuarterAngle=a=>Math.atan2(Math.sin(a),Math.cos(a));
-const turnEase=t=>t*t*(3-2*t);
+// Smootherstep: zero velocity and acceleration at both ends, so a quarter turn starts and settles softly.
+const turnEase=t=>t*t*t*(t*(6*t-15)+10);
 // Cubic Hermite from 0 to 1 with start/end slopes m0/m1 (in units of the whole move per duration).
 export function hermite(w,m0,m1){const w2=w*w,w3=w2*w;return (w3-2*w2+w)*m0+(-2*w3+3*w2)+(w3-w2)*m1;}
 export function hermiteSlope(w,m0,m1){return (3*w*w-4*w+1)*m0+(6*w-6*w*w)+(3*w*w-2*w)*m1;}
@@ -20,11 +21,18 @@ const MOVE_OFFSET={forward:0,strafeRight:1,back:2,strafeLeft:3};
 export class GridWalker {
  constructor(world,{origin=GRID_ORIGIN,cell=CELL,i=0,j=0,heading=0}={}){
   this.world=world;this.origin=origin;this.cell=cell;this.i=i;this.j=j;this.heading=(heading%4+4)%4;
-  const [x,z]=this.center(i,j);this.x=x;this.z=z;this.y=world.height(x,z)+EYE_HEIGHT;this.yaw=headingYaw(this.heading);
+  const [x,z]=this.center(i,j);this.x=x;this.z=z;this.y=this.eyeHeight(x,z);this.yaw=headingYaw(this.heading);
   this.action=null;this.cooldown=0;this.steps=0;this.turns=0;this.bumps=0;this.travelled=0;this.speed=0;this.carry=null;
   this.edges=new Map();this.visited=new Set([this.key(i,j)]);
  }
  key(i,j){return i+','+j;}
+ // The eye rides an averaged ground (nine samples up to 2.6 m away), so gliding over the terrain's straight triangle
+ // edges never jolts the view; a short exponential settle smooths what is left.
+ eyeHeight(x,z){
+  const h=this.world.height,r=EYE_SPREAD;let sum=h(x,z)*2,weight=2;
+  for(const k of [1,.5])for(const [dx,dz] of [[1,0],[-1,0],[0,1],[0,-1]]){const w=k===1?.6:1;sum+=h(x+dx*r*k,z+dz*r*k)*w;weight+=w;}
+  return sum/weight+EYE_HEIGHT;
+ }
  center(i,j){return [this.origin[0]+i*this.cell,this.origin[1]+j*this.cell];}
  cellOf(x,z){return [Math.round((x-this.origin[0])/this.cell),Math.round((z-this.origin[1])/this.cell)];}
  get busy(){return this.action!==null||this.cooldown>0;}
@@ -61,7 +69,7 @@ export class GridWalker {
   // A chained step also uses the part of this frame left over after landing, so the glide never hitches.
   if(m0>0&&carry.spare>0){
    const a=this.action;a.t=Math.min(duration,carry.spare);const s=hermite(a.t/duration,m0,a.m1),px=this.x,pz=this.z;
-   this.x=ax+(bx-ax)*s;this.z=az+(bz-az)*s;this.y=this.world.height(this.x,this.z)+EYE_HEIGHT;
+   this.x=ax+(bx-ax)*s;this.z=az+(bz-az)*s;
    this.travelled+=Math.hypot(this.x-px,this.z-pz);this.speed=this.travelled/carry.frame;
   }
   return 'step';
@@ -74,22 +82,31 @@ export class GridWalker {
   const velocity=(1-a.s0)*hermiteSlope(w,a.m0,a.m1)/a.duration;
   Object.assign(a,{t:0,duration:rest,s0:s,m0:Math.min(3,velocity*rest/(1-s)),m1:0});
  }
+ // A first-order settle toward the averaged ground, fed forward by the ground's own rate of change: a steady slope is
+ // tracked without lagging below it, while the averaging removes the jolts at triangle edges. A floor keeps the eye
+ // clear of crests; it is part of the target, so it is eased in rather than snapped.
+ followGround(dt){
+  const target=Math.max(this.eyeHeight(this.x,this.z),this.world.height(this.x,this.z)+EYE_FLOOR);
+  const k=1-Math.exp(-dt/EYE_SETTLE_SECONDS),raw=this.groundTarget===undefined?0:(target-this.groundTarget)/dt;this.groundTarget=target;
+  this.groundRate=(this.groundRate||0)+(raw-(this.groundRate||0))*k;
+  this.y+=(target+this.groundRate*EYE_SETTLE_SECONDS-this.y)*k;
+ }
  // Advances the current animation. Returns the action kind that finished during this update, if any.
  update(dt){
   this.travelled=0;this.speed=0;
   if(!(dt>0&&Number.isFinite(dt)))return null;
-  if(!this.action){this.carry=null;this.cooldown=Math.max(0,this.cooldown-dt);return null;}
+  if(!this.action){this.carry=null;this.cooldown=Math.max(0,this.cooldown-dt);this.followGround(dt);return null;}
   const a=this.action,spare=a.t+dt-a.duration;a.t=Math.min(a.duration,a.t+dt);const w=a.t/a.duration;
   const px=this.x,pz=this.z;
   if(a.kind==='step'){const s=a.s0+(1-a.s0)*hermite(w,a.m0,a.m1);this.x=a.ax+(a.bx-a.ax)*s;this.z=a.az+(a.bz-a.az)*s;}
-  else if(a.kind==='bump'){const push=Math.sin(Math.PI*w)*.22;this.x=a.ax+a.dx*push;this.z=a.az+a.dz*push;}
+  else if(a.kind==='bump'){const push=Math.sin(Math.PI*w)**2*.12;this.x=a.ax+a.dx*push;this.z=a.az+a.dz*push;}
   else this.yaw=a.fromYaw+a.deltaYaw*turnEase(w);
-  this.y=this.world.height(this.x,this.z)+EYE_HEIGHT;
+  this.followGround(dt);
   if(a.kind==='step'){this.travelled=Math.hypot(this.x-px,this.z-pz);this.speed=this.travelled/dt;}
   if(a.t<a.duration)return null;
   // Land exactly on the grid: no accumulated drift after hundreds of steps.
   if(a.kind==='turn'){this.yaw=headingYaw(this.heading);this.cooldown=TURN_REPEAT_PAUSE;}
-  else{[this.x,this.z]=this.center(this.i,this.j);this.y=this.world.height(this.x,this.z)+EYE_HEIGHT;}
+  else[this.x,this.z]=this.center(this.i,this.j);
   if(a.kind==='step'&&a.m1>0)this.carry={dx:a.dx,dz:a.dz,speed:(1-a.s0)*a.m1*this.cell/a.duration,spare:Math.max(0,spare),frame:dt};
   this.action=null;return a.kind;
  }

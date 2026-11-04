@@ -92,7 +92,12 @@ with sync_playwright() as pw:
  assert page.evaluate('nagi.grid.heading')==(h+1)%4
  page.keyboard.press('ArrowLeft');settle(page);assert page.evaluate('nagi.grid.heading')==h
  # Walking on until the sea or a prop: a bump neither moves nor adds a footstep.
- page.keyboard.down('w');page.wait_for_function('nagi.grid.bumps>=1',timeout=60000);page.keyboard.up('w');settle(page)
+ before=page.evaluate('nagi.grid.bumps');page.keyboard.down('w');page.wait_for_function(f'nagi.grid.bumps>{before}',timeout=60000)
+ # Holding on against the wall bumps once only: no repeated nudge that reads as camera shake.
+ bumped=page.evaluate('nagi.grid.bumps');trace=[]
+ for _ in range(6):page.wait_for_timeout(250);trace.append(page.evaluate('[nagi.grid.bumps,nagi.grid.i,nagi.grid.j,nagi.grid.heading,nagi.grid.steps]'))
+ assert page.evaluate('nagi.grid.bumps')==bumped,(bumped,trace)
+ page.keyboard.up('w');settle(page)
  edge=page.evaluate('nagi.position');shore=page.evaluate('nagi.footsteps');assert not expect_step(page,'w')
  assert page.evaluate('nagi.position')==edge and page.evaluate('nagi.footsteps')==shore
  # M hides and shows the automap; the travel book explains the controls.
@@ -131,7 +136,7 @@ with sync_playwright() as pw:
  t=time.time();touch('touchStart',195,700,t);touch('touchEnd',at=t+.06);settle(mobile);assert actions()==1,mobile.evaluate('nagi.grid')
  # A press held longer than the tap window is not a step.
  t=time.time();touch('touchStart',195,700,t);touch('touchEnd',at=t+.6);settle(mobile);assert actions()==1
- touch('touchStart',195,700);touch('touchMove',195,640);mobile.wait_for_function('nagi.grid.steps+nagi.grid.bumps>=4',timeout=15000);touch('touchEnd');settle(mobile)
+ touch('touchStart',195,700);touch('touchMove',195,640);mobile.wait_for_function('nagi.grid.steps+nagi.grid.bumps>=2',timeout=15000);mobile.wait_for_timeout(800);touch('touchEnd');settle(mobile)
  done=actions();mobile.wait_for_timeout(600);assert actions()==done
  turns=mobile.evaluate('nagi.grid.turns')
  t=time.time();touch('touchStart',195,700,t);touch('touchMove',260,705,t+.08);mobile.wait_for_function(f'nagi.grid.turns>{turns}',timeout=15000);touch('touchEnd');settle(mobile)
@@ -139,7 +144,7 @@ with sync_playwright() as pw:
  # Long press, then slide sideways: side-steps with the heading unchanged.
  heading=mobile.evaluate('nagi.grid.heading');turns=mobile.evaluate('nagi.grid.turns')
  t=time.time();touch('touchStart',195,700,t);mobile.wait_for_timeout(300);touch('touchMove',270,702,t+.25)
- mobile.wait_for_function(f'nagi.grid.steps+nagi.grid.bumps>={done+2}',timeout=15000);touch('touchEnd');settle(mobile)
+ mobile.wait_for_function(f'nagi.grid.steps+nagi.grid.bumps>={done+1}',timeout=15000);mobile.wait_for_timeout(800);touch('touchEnd');settle(mobile)
  assert mobile.evaluate('nagi.grid.turns')==turns and mobile.evaluate('nagi.grid.heading')==heading
  box=mobile.locator('#automap').bounding_box();assert box and box['y']+box['height']<844/2,box
  # The greeting sits clear of the larger map.

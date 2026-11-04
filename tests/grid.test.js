@@ -138,3 +138,24 @@ test('a quarter turn is unhurried and a held turn pauses between quarters; a sho
  const g=new GridGesture(),b={top:0,height:800},touch=(x,y)=>({pointerId:9,pointerType:'touch',clientX:x,clientY:y,button:0,buttons:1,isPrimary:true});
  g.begin(touch(200,600),b,0);g.move(touch(260,600),HOLD_SECONDS+.01);assert.equal(g.command,'strafeRight');
 });
+
+test('gliding over real hills, the eye stays smooth and clear of the ground',()=>{
+ const world=new CollisionWorld([],{height,walkable}),cells=gridCells(routes[2]),w=new GridWalker(world,{i:cells[0][0],j:cells[0][1]});
+ const raw=[],eye=[];let k=1;
+ for(let f=0;f<6000&&k<cells.length;f++){
+  w.update(1/60);
+  if(!w.action){const [di,dj]=[cells[k][0]-w.i,cells[k][1]-w.j];w.heading=HEADINGS.findIndex(([a,b])=>a===di&&b===dj);w.yaw=headingYaw(w.heading);w.command('forward',{hold:true});k++;}
+  raw.push(height(w.x,w.z)+1.65);eye.push(w.y);
+ }
+ const jolt=a=>{let m=0;for(let i=2;i<a.length;i++)m=Math.max(m,Math.abs(a[i]-2*a[i-1]+a[i-2]));return m;};
+ // The bare triangle surface jolts the view at its edges; the eye's path is several times smoother.
+ assert.ok(jolt(eye)<jolt(raw)/3,[jolt(eye),jolt(raw)]);
+ assert.ok(Math.min(...eye.map((y,i)=>y-(raw[i]-1.65)))>1.15);
+ assert.ok(Math.max(...eye.map((y,i)=>Math.abs(y-raw[i])))<.6);
+});
+
+test('a bump is a small, soft nudge that returns exactly to the cell',()=>{
+ const w=new GridWalker(flat([],(x,z)=>z>-2),{origin:[0,0]});w.command('forward');let far=0;
+ while(w.action){w.update(1/120);far=Math.max(far,-w.z);}
+ assert.ok(far>.05&&far<=.13,far);assert.equal(w.z,0);
+});
