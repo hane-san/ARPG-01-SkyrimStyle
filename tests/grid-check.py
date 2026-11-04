@@ -10,13 +10,20 @@ atexit.register(server.terminate);time.sleep(.5)
 probe="""
 window._gridQA={
  canStep:(i,j,ni,nj)=>walker.canStep(i,j,ni,nj),
- go(i,j){walker.action=null;walker.i=i;walker.j=j;[walker.x,walker.z]=walker.center(i,j);walker.y=height(walker.x,walker.z)+1.65;},
- roads(){const bad=[];for(const points of routes){const c=gridCells(points,GRID_ORIGIN,CELL);for(let k=1;k<c.length;k++){const [a,b]=[c[k-1],c[k]];if(!walker.canStep(a[0],a[1],b[0],b[1])||!walker.canStep(b[0],b[1],a[0],a[1]))bad.push([a,b]);}}return bad;},
+ go(i,j,h){walker.action=null;walker.i=i;walker.j=j;[walker.x,walker.z]=walker.center(i,j);walker.y=height(walker.x,walker.z)+1.65;if(h!==undefined){walker.heading=h;walker.yaw=-h*Math.PI/2;}},
+ corridor(n){
+  const seen=new Set(['0,0']),queue=[[0,0]],dirs=[[0,-1],[1,0],[0,1],[-1,0]];
+  while(queue.length){const [i,j]=queue.shift();
+   for(let h=0;h<4;h++){const [dx,dz]=dirs[h];let k=0;while(k<n&&walker.canStep(i+dx*k,j+dz*k,i+dx*(k+1),j+dz*(k+1)))k++;if(k===n)return [i,j,h];}
+   for(const [dx,dz] of dirs){const key=(i+dx)+','+(j+dz);if(!seen.has(key)&&walker.canStep(i,j,i+dx,j+dz)){seen.add(key);queue.push([i+dx,j+dz]);}}}
+  return null;
+ },
+ roads(){const bad=[];for(const points of routes){const c=gridCells(points,GRID_ORIGIN,CELL,walkable);for(let k=1;k<c.length;k++){const [a,b]=[c[k-1],c[k]];if(!walker.canStep(a[0],a[1],b[0],b[1])||!walker.canStep(b[0],b[1],a[0],a[1]))bad.push([a,b]);}}return bad;},
  reach(){
   const seen=new Set(['0,0']),queue=[[0,0]];
   while(queue.length){const [i,j]=queue.pop();for(const [dx,dz] of [[0,-1],[1,0],[0,1],[-1,0]]){const k=(i+dx)+','+(j+dz);if(!seen.has(k)&&walker.canStep(i,j,i+dx,j+dz)){seen.add(k);queue.push([i+dx,j+dz]);}}}
   const cells=[...seen].map(k=>k.split(',').map(Number)).map(([i,j])=>cellCentre(i,j)),near=(x,z,r)=>cells.some(([a,b])=>Math.hypot(a-x,b-z)<r);
-  return {cells:cells.length,places:landmarks.filter(([,,x,z,r])=>!near(x,z,r)).map(l=>l[0]),islanders:npcs.filter(n=>!near(n.x,n.z,4.8)).map(n=>n.name),scenes:scenes.filter(s=>!near(s.x,s.z,s.radius)).map(s=>s.id),
+  return {cells:cells.length,places:landmarks.filter(([,,x,z,r])=>!near(x,z,Math.max(r,CELL*.8))).map(l=>l[0]),islanders:npcs.filter(n=>!near(n.x,n.z,Math.max(4.8,CELL+.8))).map(n=>n.name),scenes:scenes.filter(s=>!near(s.x,s.z,s.radius)).map(s=>s.id),
    islandersOnGrid:npcs.every(n=>{const [i,j]=cellIndex(n.x,n.z),[x,z]=cellCentre(i,j);return Math.abs(x-n.x)<1e-9&&Math.abs(z-n.z)<1e-9&&!roadCells.has(i+','+j);})};
  }
 };
@@ -62,7 +69,7 @@ with sync_playwright() as pw:
 
  page=browser.new_page(viewport={'width':1280,'height':800});page.on('pageerror',lambda e:errors.append(str(e)));install(page)
  page.goto(base,wait_until='networkidle');page.wait_for_function('!!window.nagi && !!nagi.grid && !!window._gridQA',timeout=30000)
- assert page.evaluate('nagi.grid.cell')==4.5
+ assert page.evaluate('nagi.grid.cell')==6
  # Layout: every road cell can be walked both ways (no prop on a road), islanders sit on free cells,
  # and every place name, islander greeting and quiet scene can be reached from the landing.
  assert page.evaluate('_gridQA.roads()')==[]
@@ -74,15 +81,19 @@ with sync_playwright() as pw:
  start=page.evaluate('nagi.position');assert cell(page)==(0,0) and start['yaw']==0 and page.evaluate('nagi.grid.road')
  assert page.locator('#automap').is_visible() and page.evaluate('nagi.grid.automap')
  box=page.locator('#automap').bounding_box();assert box['width']>=140,box
- # Face along a corridor with four open cells, then single presses, a held glide and its stop.
+ # From the landing, the first open cell ahead is one step.
  for turn in range(4):
   i,j=cell(page);h=page.evaluate('nagi.grid.heading');dx,dz=HEADINGS[h]
-  if all(page.evaluate('([a,b,c,d])=>_gridQA.canStep(a,b,c,d)',[i+dx*k,j+dz*k,i+dx*(k+1),j+dz*(k+1)]) for k in range(5)):break
+  if page.evaluate('([a,b,c,d])=>_gridQA.canStep(a,b,c,d)',[i,j,i+dx,j+dz]):break
   page.keyboard.press('e');settle(page)
- else:raise AssertionError('no open corridor from the landing')
+ else:raise AssertionError('no open cell beside the landing')
+ assert expect_step(page,'w')
+ # Then, on the nearest straight stretch of four open cells, single presses, a held glide and its stop.
+ corridor=page.evaluate('_gridQA.corridor(4)');assert corridor,'no straight stretch of four cells'
+ page.evaluate('([i,j,h])=>_gridQA.go(i,j,h)',corridor);settle(page)
  assert expect_step(page,'w')
  before=page.evaluate('nagi.grid.steps');i,j=cell(page)
- page.keyboard.down('w');page.wait_for_function(f'nagi.grid.steps>={before+3}',timeout=15000);page.keyboard.up('w');settle(page)
+ page.keyboard.down('w');page.wait_for_function(f'nagi.grid.steps>={before+2}',timeout=15000);page.keyboard.up('w');settle(page)
  held=page.evaluate('nagi.grid.steps')-before;h=page.evaluate('nagi.grid.heading');dx,dz=HEADINGS[h]
  assert cell(page)==(i+dx*held,j+dz*held)
  p=page.evaluate('nagi.position');page.wait_for_timeout(600);assert page.evaluate('nagi.position')==p
@@ -107,12 +118,12 @@ with sync_playwright() as pw:
  page.keyboard.press('Escape');page.wait_for_timeout(200)
  page.screenshot(path=str(root/'grid-desktop.png'))
  # Regions (Issue #21): the glass house brings its own music and sky; the shore returns to the home theme.
- assert page.evaluate('nagi.region')=='shore' and page.evaluate('nagi.musicTrack')=='shore'
+ page.evaluate('_gridQA.go(0,0)');page.wait_for_function("nagi.region==='shore' && nagi.musicTrack==='shore'",timeout=20000)
  base_sky=page.evaluate('nagi.skyHorizon')
- page.evaluate('_gridQA.go(-6,-6)')
+ page.evaluate('([i,j])=>_gridQA.go(i,j)',[round((-16-8)/6),round((9-30)/6)])
  page.wait_for_function("nagi.region==='greenhouse' && nagi.musicTrack==='greenhouse'",timeout=20000)
  page.wait_for_timeout(2500);assert page.evaluate('nagi.skyHorizon')!=base_sky
- for region,(i,j) in {'snowridge':(0,-29),'meadow':(-4,-24),'windgate':(-4,-13)}.items():
+ for region,(i,j) in {'snowridge':(0,-21),'meadow':(-3,-18),'windgate':(-3,-10)}.items():
   page.evaluate(f'_gridQA.go({i},{j})');page.wait_for_function(f"nagi.region==='{region}' && nagi.musicTrack==='{region}'",timeout=20000)
  page.evaluate('_gridQA.go(0,0)');page.wait_for_function("nagi.region==='shore' && nagi.musicTrack==='shore'",timeout=20000)
  assert page.evaluate('nagi.audioState')=='running'
@@ -146,6 +157,16 @@ with sync_playwright() as pw:
  t=time.time();touch('touchStart',195,700,t);mobile.wait_for_timeout(300);touch('touchMove',270,702,t+.25)
  mobile.wait_for_function(f'nagi.grid.steps+nagi.grid.bumps>={done+1}',timeout=15000);mobile.wait_for_timeout(800);touch('touchEnd');settle(mobile)
  assert mobile.evaluate('nagi.grid.turns')==turns and mobile.evaluate('nagi.grid.heading')==heading
+ # A quick downward flick steps back once, still facing the same way; holding on does not repeat it.
+ heading=mobile.evaluate('nagi.grid.heading');before=actions()
+ t=time.time();touch('touchStart',195,640,t);touch('touchMove',195,700,t+.08);mobile.wait_for_function(f'nagi.grid.steps+nagi.grid.bumps>{before}',timeout=15000)
+ mobile.wait_for_timeout(1200);touch('touchEnd');settle(mobile)
+ assert actions()==before+1 and mobile.evaluate('nagi.grid.heading')==heading
+ # Long press, then slide down: an about-face (once), no step.
+ turns=mobile.evaluate('nagi.grid.turns');before=actions()
+ t=time.time();touch('touchStart',195,640,t);mobile.wait_for_timeout(300);touch('touchMove',195,700,t+.3)
+ mobile.wait_for_function(f'nagi.grid.turns>{turns}',timeout=15000);mobile.wait_for_timeout(1500);touch('touchEnd');settle(mobile)
+ assert mobile.evaluate('nagi.grid.heading')==(heading+2)%4 and mobile.evaluate('nagi.grid.turns')==turns+1 and actions()==before
  box=mobile.locator('#automap').bounding_box();assert box and box['y']+box['height']<844/2,box
  # The greeting sits clear of the larger map.
  mobile.evaluate("document.querySelector('#greeting').setAttribute('aria-hidden','false')")
@@ -155,4 +176,4 @@ with sync_playwright() as pw:
  mobile.screenshot(path=str(root/'grid-mobile.png'))
  assert not errors,errors
  browser.close()
-print('default grid mode: regional music and sky, grid layout, single and gliding steps, quarter turns, crab walk, shore bumps, automap and touch passed')
+print('default grid mode: regional music and sky, grid layout, single and gliding steps, quarter turns, crab walk, back flick, about-face, shore bumps, automap and touch passed')

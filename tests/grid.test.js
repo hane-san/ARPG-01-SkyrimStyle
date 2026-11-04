@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {height,walkable,landmarks} from '../dist/terrain.js';
 import {CollisionWorld,circleCollider} from '../dist/movement.js';
 import {routes} from '../dist/terrain.js';
-import {CELL,GRID_ORIGIN,STEP_SECONDS,TURN_SECONDS,HOLD_SECONDS,HEADINGS,headingYaw,nearestHeading,hermite,GridWalker,GridGesture,keyCommand,swipeCommand,automapCells,gridCells,gridRoute} from '../dist/grid.js';
+import {ONE_SHOT,TURN_AROUND_SECONDS,CELL,GRID_ORIGIN,STEP_SECONDS,TURN_SECONDS,HOLD_SECONDS,HEADINGS,headingYaw,nearestHeading,hermite,GridWalker,GridGesture,keyCommand,swipeCommand,automapCells,gridCells,gridRoute} from '../dist/grid.js';
 
 const flat=(obstacles=[],dry=()=>true)=>new CollisionWorld(obstacles,{height:()=>1,walkable:dry});
 const run=(w,seconds)=>{for(let t=0;t<seconds;t+=1/60)w.update(1/60);};
@@ -29,9 +29,9 @@ test('quarter turns rotate in place and side-steps follow the heading',()=>{
  const w=new GridWalker(flat(),{origin:[0,0]});
  assert.equal(w.command('turnRight'),'turn');run(w,TURN_SECONDS+.35);
  assert.equal(w.heading,1);assert.equal(w.x,0);assert.equal(w.z,0);assert.ok(Math.abs(w.yaw-headingYaw(1))<1e-12);
- w.command('forward');run(w,.3);assert.deepEqual([w.i,w.j],[1,0]);
- w.command('strafeRight');run(w,.3);assert.deepEqual([w.i,w.j],[1,1]);
- w.command('strafeLeft');run(w,.3);w.command('back');run(w,.3);assert.deepEqual([w.i,w.j],[0,0]);
+ w.command('forward');run(w,STEP_SECONDS+.05);assert.deepEqual([w.i,w.j],[1,0]);
+ w.command('strafeRight');run(w,STEP_SECONDS+.05);assert.deepEqual([w.i,w.j],[1,1]);
+ w.command('strafeLeft');run(w,STEP_SECONDS+.05);w.command('back');run(w,STEP_SECONDS+.05);assert.deepEqual([w.i,w.j],[0,0]);
  for(let n=0;n<3;n++){w.command('turnLeft');run(w,TURN_SECONDS+.35);}assert.equal(w.heading,2);
 });
 
@@ -79,7 +79,7 @@ test('gesture: lower half only, tap is one step, multitouch and release clear in
 
 test('automap lists only visited cells around the walker',()=>{
  const w=new GridWalker(flat(),{origin:[0,0]});
- for(let n=0;n<4;n++){w.command('forward');run(w,.3);}
+ for(let n=0;n<4;n++){w.command('forward');run(w,STEP_SECONDS+.05);}
  assert.equal(w.visited.size,5);
  assert.deepEqual(automapCells(w,2).sort((a,b)=>a[1]-b[1]),[[0,0],[0,1],[0,2]]);
 });
@@ -113,34 +113,36 @@ test('a slide that starts after resting or walking side-steps; a quick flick tur
  // Walk forward, then slide sideways: crab, while facing forward. Sliding down backs off facing forward.
  g.begin(touch(3,200,600),b,0);g.move(touch(3,200,540),.1);assert.equal(g.command,'forward');
  g.move(touch(3,290,560),.8);assert.equal(g.command,'strafeRight');
- g.move(touch(3,205,680),1);assert.equal(g.command,'back');g.end(touch(3,205,680),1.1);
+ g.move(touch(3,205,680),1);assert.equal(g.command,'turnAround');g.end(touch(3,205,680),1.1);
+ // A quick downward flick steps back once, facing forward; it is offered once per slide.
+ g.begin(touch(4,200,600),b,0);g.move(touch(4,200,660),.08);assert.equal(g.command,'back');assert.equal(g.available(),'back');g.take('back');assert.equal(g.available(),null);g.move(touch(4,200,680),1);assert.equal(g.command,'back');assert.equal(g.available(),null);g.end(touch(4,200,680),1.1);
 });
 
 test('roads lie on the grid as 4-connected cells and stay walkable from end to end',()=>{
  const world=new CollisionWorld([],{height,walkable}),w=new GridWalker(world);
  assert.deepEqual(gridCells([[8,30],[8+CELL*3,30-CELL*2]]),[[0,0],[1,0],[1,-1],[2,-1],[2,-2],[3,-2]]);
  for(const points of routes){
-  const cells=gridCells(points);
+  const cells=gridCells(points,GRID_ORIGIN,CELL,walkable);
   for(let k=1;k<cells.length;k++){
    const [a,b]=[cells[k-1],cells[k]];assert.equal(Math.abs(a[0]-b[0])+Math.abs(a[1]-b[1]),1);
    assert.ok(w.canStep(a[0],a[1],b[0],b[1]),'road step '+a+' -> '+b);
   }
   // Straight runs merge; every corner is a right angle.
-  const line=gridRoute(points);for(let k=1;k<line.length;k++)assert.ok(line[k][0]===line[k-1][0]||line[k][1]===line[k-1][1]);
+  const line=gridRoute(points,GRID_ORIGIN,CELL,walkable);for(let k=1;k<line.length;k++)assert.ok(line[k][0]===line[k-1][0]||line[k][1]===line[k-1][1]);
  }
 });
 
 test('a quarter turn is unhurried and a held turn pauses between quarters; a short hold is enough to crab',()=>{
  const w=new GridWalker(flat(),{origin:[0,0]});
- assert.ok(TURN_SECONDS>=.28);w.command('turnRight');run(w,.2);assert.ok(w.busy&&w.yaw>-Math.PI/2+.05,'still turning after 0.2 s');
- run(w,TURN_SECONDS);assert.equal(w.command('turnRight'),null,'a held turn waits before the next quarter');
+ assert.ok(TURN_SECONDS>=.5);w.command('turnRight');run(w,.2);assert.ok(w.busy&&w.yaw>-Math.PI/2+.05,'still turning after 0.2 s');
+ run(w,TURN_SECONDS-.2+.01);assert.equal(w.command('turnRight'),null,'a held turn waits before the next quarter');
  assert.ok(HOLD_SECONDS<=.2);
  const g=new GridGesture(),b={top:0,height:800},touch=(x,y)=>({pointerId:9,pointerType:'touch',clientX:x,clientY:y,button:0,buttons:1,isPrimary:true});
  g.begin(touch(200,600),b,0);g.move(touch(260,600),HOLD_SECONDS+.01);assert.equal(g.command,'strafeRight');
 });
 
 test('gliding over real hills, the eye stays smooth and clear of the ground',()=>{
- const world=new CollisionWorld([],{height,walkable}),cells=gridCells(routes[2]),w=new GridWalker(world,{i:cells[0][0],j:cells[0][1]});
+ const world=new CollisionWorld([],{height,walkable}),cells=gridCells(routes[2],GRID_ORIGIN,CELL,walkable),w=new GridWalker(world,{i:cells[0][0],j:cells[0][1]});
  const raw=[],eye=[];let k=1;
  for(let f=0;f<6000&&k<cells.length;f++){
   w.update(1/60);
@@ -152,6 +154,12 @@ test('gliding over real hills, the eye stays smooth and clear of the ground',()=
  assert.ok(jolt(eye)<jolt(raw)/3,[jolt(eye),jolt(raw)]);
  assert.ok(Math.min(...eye.map((y,i)=>y-(raw[i]-1.65)))>1.15);
  assert.ok(Math.max(...eye.map((y,i)=>Math.abs(y-raw[i])))<.6);
+});
+
+test('an about-face turns right round, slower than a quarter turn, and lands exactly',()=>{
+ const w=new GridWalker(flat(),{origin:[0,0]});assert.equal(w.command('turnAround'),'turn');
+ run(w,TURN_SECONDS);assert.ok(w.busy);run(w,TURN_AROUND_SECONDS);assert.equal(w.heading,2);assert.ok(Math.abs(w.yaw-headingYaw(2))<1e-12);
+ assert.equal(keyCommand('KeyX'),'turnAround');assert.ok(ONE_SHOT.has('turnAround')&&ONE_SHOT.has('back'));
 });
 
 test('a bump is a small, soft nudge that returns exactly to the cell',()=>{
