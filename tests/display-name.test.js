@@ -22,7 +22,7 @@ test('all shipped entrypoints and manifests agree on the display identity',async
 
 test('future naming builds every artifact without changing routes, IDs, icons or game code',async()=>{
  const temp=await mkdtemp(join(tmpdir(),'arpg-display-'));
- const files=['package.json','display-name.js','index.html','manifest.webmanifest','.nojekyll','scripts/build.mjs','scripts/sync-display-name.mjs','assets/nagi-icon-120.png','dist/assets/nagi-icon-120.png','dist/index.html','dist/manifest.webmanifest','dist/nagi-standalone.html','dist/style.css','dist/island.js','dist/movement.js','dist/terrain.js','dist/journey.js'];
+ const files=['package.json','display-name.js','index.html','manifest.webmanifest','.nojekyll','scripts/build.mjs','scripts/sync-display-name.mjs','assets/nagi-icon-120.png','dist/assets/nagi-icon-120.png','dist/index.html','dist/manifest.webmanifest','dist/nagi-standalone.html','dist/style.css','dist/island.js','dist/movement.js','dist/terrain.js','dist/journey.js','dist/grid.js'];
  try{
   const before=new Map();
   for(const file of files){await mkdir(dirname(join(temp,file)),{recursive:true});await copyFile(new URL(file,root),join(temp,file));before.set(file,await readFile(join(temp,file)));}
@@ -43,7 +43,7 @@ test('future naming builds every artifact without changing routes, IDs, icons or
     assert(html.includes('aria-label="蒼ト凪ノ島ノ旅 &amp; &lt;潮&gt;。WASD'));
     assert(html.includes('class="folio">蒼ト凪ノ島ノ旅 &amp; &lt;潮&gt; ／'));
     assert(html.includes('name="nagi-release" content="2026-10-18-movement-core"'));
-   }else assert(html.includes('location.replace(new URL("./dist/index.html",document.baseURI).href)'));
+   }else assert(html.includes('location.replace(new URL("./dist/index.html"+location.search,document.baseURI).href)'));
   }
   for(const file of ['manifest.webmanifest','dist/manifest.webmanifest']){
    const expected=JSON.parse(before.get(file));expected.name='蒼ト凪ノ島ノ旅 & <潮>';expected.short_name=expected.name;

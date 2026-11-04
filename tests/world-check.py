@@ -80,7 +80,7 @@ with sync_playwright() as p:
  errors=[];page.on('pageerror',lambda e:errors.append(str(e)));page.add_init_script(upload_probe)
  source=(root/'dist/island.js').read_text()+probe
  page.route('**/island.js?*',lambda route:route.fulfill(status=200,content_type='application/javascript',body=source))
- page.goto('http://127.0.0.1:4174/',wait_until='networkidle');page.wait_for_function('!!window._qa');page.locator('#begin').click()
+ page.goto('http://127.0.0.1:4174/?grid=0',wait_until='networkidle');page.wait_for_function('!!window._qa');page.locator('#begin').click()
  page.wait_for_function('getComputedStyle(document.querySelector("#arrival")).visibility === "hidden"')
  assert page.evaluate('nagi.worldVertices')<900000
  assert page.evaluate('nagi.islanders')==18

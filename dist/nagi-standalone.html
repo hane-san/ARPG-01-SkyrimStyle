@@ -109,6 +109,17 @@ button:focus-visible{outline:2px solid #385e4b;outline-offset:4px}
  #words{font-size:13px}
 }
 
+/* Opt-in grid mode (?grid=1): a small automap below the travel book button, clear of the lower touch half. */
+#automap{position:fixed;inset:auto;top:calc(var(--safe-top) + 72px);right:max(4vw,var(--safe-right));width:112px;height:112px;border:1px solid #5d786b55;pointer-events:none;opacity:.85}
+#automap[hidden],body:not(.playing) #automap{display:none}
+.reading #automap{opacity:0}
+
+@media(max-width:700px),(pointer:coarse){.grid-mode #greeting{top:calc(var(--safe-top) + 198px)}}
+@media(max-height:600px) and (orientation:landscape){
+ #automap{top:calc(var(--safe-top) + 12px);right:calc(max(4vw,var(--safe-right)) + 56px);width:88px;height:88px}
+ .grid-mode #greeting{top:calc(var(--safe-top) + 70px);max-width:calc(100vw - 12vw - 170px)}
+}
+
 </style></head>
 <body>
 <canvas id="world" tabindex="0" aria-label="凪の島。WASDで移動、左右矢印で旋回。画面下半分で一本指を置き、上で前進、下で後退、左右で旋回します。離すと停止します。"></canvas>
@@ -129,6 +140,7 @@ button:focus-visible{outline:2px solid #385e4b;outline-offset:4px}
  <p class="book-footnote">しおりを開いている間、歩みと音は止まります。</p>
  <button id="resume-journey" type="button">旅をつづける <span aria-hidden="true">⟶</span></button>
 </dialog>
+<canvas id="automap" width="112" height="112" role="img" aria-label="地図" hidden></canvas>
 <div id="place" aria-live="polite" aria-hidden="true"><span id="place-jp"></span><small id="place-en"></small></div>
 <div id="greeting" role="status" aria-live="polite" aria-hidden="true"><span id="speaker"></span><p id="words"></p></div>
 <div id="hint" aria-hidden="true"></div>
@@ -455,6 +467,128 @@ class JourneyNotices {
  setEnabled(enabled){this.enabled=enabled;this.clear();}
 }
 
+// Grid travel for the opt-in dungeon-crawler mode (?grid=1): one cell per step, quarter turns.
+// No DOM, WebGL or audio. The world supplies walkable(), height() and the swept move() of CollisionWorld.
+const gridEase=t=>t*t*(3-2*t);
+const CELL=3,STEP_SECONDS=.21,QUICK_STEP_SECONDS=.15,TURN_SECONDS=.18,TURN_REPEAT_PAUSE=.14,BUMP_SECONDS=.18,EYE_HEIGHT=1.65;
+// Headings are compass quarters: 0 north (-z), 1 east (+x), 2 south (+z), 3 west (-x).
+const HEADINGS=Object.freeze([[0,-1],[1,0],[0,1],[-1,0]]);
+const HEADING_NAMES=Object.freeze(['北','東','南','西']);
+const headingYaw=h=>-((h%4+4)%4)*Math.PI/2;
+function nearestHeading(yaw){return ((Math.round(-yaw/(Math.PI/2))%4)+4)%4;}
+const wrapQuarterAngle=a=>Math.atan2(Math.sin(a),Math.cos(a));
+const COMMANDS=Object.freeze(['forward','back','strafeLeft','strafeRight','turnLeft','turnRight']);
+// Movement direction relative to the current heading, in quarter turns.
+const MOVE_OFFSET={forward:0,strafeRight:1,back:2,strafeLeft:3};
+
+class GridWalker {
+ constructor(world,{origin=[0,0],cell=CELL,i=0,j=0,heading=0}={}){
+  this.world=world;this.origin=origin;this.cell=cell;this.i=i;this.j=j;this.heading=(heading%4+4)%4;
+  const [x,z]=this.center(i,j);this.x=x;this.z=z;this.y=world.height(x,z)+EYE_HEIGHT;this.yaw=headingYaw(this.heading);
+  this.action=null;this.cooldown=0;this.steps=0;this.turns=0;this.bumps=0;this.travelled=0;this.speed=0;
+  this.edges=new Map();this.visited=new Set([this.key(i,j)]);
+ }
+ key(i,j){return i+','+j;}
+ center(i,j){return [this.origin[0]+i*this.cell,this.origin[1]+j*this.cell];}
+ get busy(){return this.action!==null||this.cooldown>0;}
+ // A step is legal only when the swept body reaches the next centre exactly: no water, no props, no sliding.
+ canStep(i,j,ni,nj){
+  const id=i+','+j+'>'+ni+','+nj;let ok=this.edges.get(id);
+  if(ok===undefined){
+   const [ax,az]=this.center(i,j),[bx,bz]=this.center(ni,nj);
+   ok=this.world.walkable(bx,bz)&&(()=>{const r=this.world.move(ax,az,bx-ax,bz-az);return Math.hypot(r.x-bx,r.z-bz)<.01;})();
+   this.edges.set(id,ok);
+  }
+  return ok;
+ }
+ // Starts a command. Returns 'step', 'turn', 'blocked', or null while a previous action is still playing.
+ command(name,{quick=false}={}){
+  if(this.busy||!COMMANDS.includes(name))return null;
+  if(name==='turnLeft'||name==='turnRight'){
+   const from=this.yaw,to=headingYaw(this.heading+(name==='turnRight'?1:-1)),delta=wrapQuarterAngle(to-from);
+   this.heading=(this.heading+(name==='turnRight'?1:3))%4;this.turns++;
+   this.action={kind:'turn',t:0,duration:TURN_SECONDS,fromYaw:from,deltaYaw:delta};return 'turn';
+  }
+  const [dx,dz]=HEADINGS[(this.heading+MOVE_OFFSET[name])%4],ni=this.i+dx,nj=this.j+dz;
+  const [ax,az]=this.center(this.i,this.j),[bx,bz]=this.center(ni,nj);
+  if(!this.canStep(this.i,this.j,ni,nj)){
+   this.bumps++;this.action={kind:'bump',t:0,duration:BUMP_SECONDS,ax,az,dx,dz};return 'blocked';
+  }
+  this.i=ni;this.j=nj;this.visited.add(this.key(ni,nj));this.steps++;
+  this.action={kind:'step',t:0,duration:quick?QUICK_STEP_SECONDS:STEP_SECONDS,ax,az,bx,bz};return 'step';
+ }
+ // Advances the current animation. Returns the action kind that finished during this update, if any.
+ update(dt){
+  this.travelled=0;this.speed=0;
+  if(!(dt>0&&Number.isFinite(dt)))return null;
+  if(!this.action){this.cooldown=Math.max(0,this.cooldown-dt);return null;}
+  const a=this.action;a.t=Math.min(a.duration,a.t+dt);const u=gridEase(a.t/a.duration);
+  const px=this.x,pz=this.z;
+  if(a.kind==='step'){this.x=a.ax+(a.bx-a.ax)*u;this.z=a.az+(a.bz-a.az)*u;}
+  else if(a.kind==='bump'){const push=Math.sin(Math.PI*a.t/a.duration)*.22;this.x=a.ax+a.dx*push;this.z=a.az+a.dz*push;}
+  else this.yaw=a.fromYaw+a.deltaYaw*u;
+  this.y=this.world.height(this.x,this.z)+EYE_HEIGHT;
+  if(a.kind==='step'){this.travelled=Math.hypot(this.x-px,this.z-pz);this.speed=this.travelled/dt;}
+  if(a.t<a.duration)return null;
+  // Land exactly on the grid: no accumulated drift after hundreds of steps.
+  if(a.kind==='turn'){this.yaw=headingYaw(this.heading);this.cooldown=TURN_REPEAT_PAUSE;}
+  else{[this.x,this.z]=this.center(this.i,this.j);this.y=this.world.height(this.x,this.z)+EYE_HEIGHT;}
+  this.action=null;return a.kind;
+ }
+}
+
+// Keyboard: W/S or ↑/↓ step, A/D side-step, Q/E or ←/→ turn a quarter. The newest held key wins.
+const KEY_COMMANDS={KeyW:'forward',ArrowUp:'forward',KeyS:'back',ArrowDown:'back',KeyA:'strafeLeft',KeyD:'strafeRight',KeyQ:'turnLeft',ArrowLeft:'turnLeft',KeyE:'turnRight',ArrowRight:'turnRight'};
+function keyCommand(code){return KEY_COMMANDS[code]||null;}
+
+// Touch: one finger in the lower half. Slide up/down to step forward/back, left/right to turn.
+// Holding keeps repeating; a short tap is one step forward. Multitouch cancels everything.
+const SWIPE_DISTANCE=22,TAP_DISTANCE=10,TAP_SECONDS=.3;
+function swipeCommand(dx,dy){
+ if(Math.hypot(dx,dy)<SWIPE_DISTANCE)return null;
+ return Math.abs(dy)>=Math.abs(dx)?(dy<0?'forward':'back'):(dx<0?'turnLeft':'turnRight');
+}
+class GridGesture {
+ constructor(){this.contacts=new Set();this.id=null;this.origin=null;this.started=0;this.command=null;this.blocked=false;this.moved=false;}
+ get held(){return this.id!==null;}
+ clearOwner(){const id=this.id;this.id=null;this.origin=null;this.command=null;this.moved=false;return id;}
+ reset(){const id=this.clearOwner();this.contacts.clear();this.blocked=false;return id;}
+ begin(e,bounds,now){
+  if(e.button>0)return false;
+  if(e.pointerType==='touch'){
+   this.contacts.add(e.pointerId);
+   if(this.contacts.size>1||e.isPrimary===false){this.blocked=true;this.clearOwner();return false;}
+   if(this.blocked)return false;
+  }
+  if(this.held||e.clientY-bounds.top<bounds.height*.5)return false;
+  this.id=e.pointerId;this.origin={x:e.clientX,y:e.clientY};this.started=now;this.command=null;this.moved=false;return true;
+ }
+ move(e){
+  if(e.pointerId!==this.id)return false;
+  if(e.pointerType==='mouse'&&(e.buttons&1)===0){this.end(e);return false;}
+  const dx=e.clientX-this.origin.x,dy=e.clientY-this.origin.y;
+  if(Math.hypot(dx,dy)>TAP_DISTANCE)this.moved=true;
+  this.command=swipeCommand(dx,dy);return true;
+ }
+ // Returns 'tap' when the release was a short, still press; otherwise true/false for ownership.
+ end(e,now){
+  this.contacts.delete(e.pointerId);if(!this.contacts.size)this.blocked=false;
+  if(e.pointerId!==this.id)return false;
+  const tap=!this.moved&&!this.command&&now-this.started<=TAP_SECONDS;
+  this.clearOwner();return tap?'tap':true;
+ }
+}
+
+// Automap: visited cells around the walker, drawn by the page. Pure data for testing.
+function automapCells(walker,radius){
+ const cells=[];
+ for(const k of walker.visited){const [i,j]=k.split(',').map(Number);if(Math.abs(i-walker.i)<=radius&&Math.abs(j-walker.j)<=radius)cells.push([i-walker.i,j-walker.j]);}
+ return cells;
+}
+
+// Dungeon-crawler travel is the default (producer decision 2026-11-04): the same island, one grid cell at a time.
+// ?grid=0 keeps the earlier free walking for comparison and its regression checks.
+const GRID_MODE=new URLSearchParams(location.search).get('grid')!=='0';
 const canvas=document.querySelector('#world'),gl=canvas.getContext('webgl',{antialias:true,alpha:false,powerPreference:'high-performance'});
 if(!gl){document.querySelector('#error').hidden=false;document.querySelector('#begin').disabled=true;throw Error('WebGL unavailable');}
 const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -910,10 +1044,14 @@ for(const [x,z,y] of [[-66,14,30],[-345,-330,65],[1105,-680,85]])seabirds.push({
 const RUN_SPEED=CRUISE_SPEED,GREETING_RADIUS=4.8;
 const collisionWorld=new CollisionWorld(obstacles,{height,walkable});
 const player=createMotionState(8,30,.25);player.y=height(8,30)+1.65;
+// Grid cells are 3 m, centred on the landing; the walker faces north up the island.
+const walker=GRID_MODE?new GridWalker(collisionWorld,{origin:[8,30],cell:CELL,heading:0}):null;
+if(walker){player.yaw=walker.yaw;player.y=walker.y;}
 const camera={x:player.x,y:player.y,z:player.z,yaw:player.yaw};
 let previous={...camera},accumulator=0;
 function resetCameraHistory(){Object.assign(camera,{x:player.x,y:player.y,z:player.z,yaw:player.yaw});Object.assign(previous,camera);accumulator=0;}
 
+let gridGesture=new GridGesture(),pendingCommand=null,keyOrder=[],automapKey=null,automapShown=true;
 let started=false,paused=false,muted=false,contextLost=false,time=0,last=performance.now(),gestures=new GestureInput(),keys=new Set(),shownPlaces=new Set(),lastGreetingDistance=null;
 const notices=new JourneyNotices(),seenScenes=new Set(),sceneDwell=new Map();
 const placeNode=document.querySelector('#place'),greetingNode=document.querySelector('#greeting'),travelBook=document.querySelector('#travel-book');
@@ -962,10 +1100,31 @@ function paintNotices(){
  else{document.querySelector('#speaker').textContent=noticeContent.title;document.querySelector('#words').textContent=noticeContent.words;}
 }
 const announcedPlaces=new Set();
+function inputHeld(){return GRID_MODE?gridGesture.held||keys.size>0:gestures.held||keys.size>0;}
+// The newest held key wins; a held slide repeats; a buffered press (key or tap) is never lost while a step plays.
+function heldCommand(){
+ if(gridGesture.held&&gridGesture.command)return gridGesture.command;
+ for(let i=keyOrder.length-1;i>=0;i--){const c=keyCommand(keyOrder[i]);if(c)return c;}
+ return null;
+}
+function gridUpdate(dt){
+ walker.update(dt);
+ if(!walker.busy){
+  const command=pendingCommand||heldCommand();pendingCommand=null;
+  if(command&&walker.command(command,{quick:keys.has('ShiftLeft')||keys.has('ShiftRight')})==='step'){
+   const [x,z]=walker.center(walker.i,walker.j);footstep(surfaceAt(x,z),CELL/STEP_SECONDS);
+  }
+ }
+ player.x=walker.x;player.z=walker.z;player.y=walker.y;player.yaw=walker.yaw;player.travelled=walker.travelled;player.actualSpeed=walker.speed;
+ drawAutomap();
+}
 function update(dt){
- const input=readMovementInput(gestures.held?gestures.value:null,keys);
- stepMotion(player,input,dt,collisionWorld);
- updateFootsteps(player.travelled,dt);
+ if(GRID_MODE)gridUpdate(dt);
+ else{
+  const input=readMovementInput(gestures.held?gestures.value:null,keys);
+  stepMotion(player,input,dt,collisionWorld);
+  updateFootsteps(player.travelled,dt);
+ }
  for(const npc of npcs){
   const dist=Math.hypot(player.x-npc.x,player.z-npc.z);
   if(dist>14){npc.encounter=false;continue;}
@@ -985,7 +1144,7 @@ function update(dt){
   if(seenScenes.has(scene.id))continue;
   const dx=scene.x-player.x,dz=scene.z-player.z,dist=Math.hypot(dx,dz);
   const facing=(-Math.sin(player.yaw)*dx-Math.cos(player.yaw)*dz)/Math.max(dist,.01);
-  if(dist<scene.radius&&facing>.45&&player.actualSpeed<.5&&!gestures.held&&keys.size===0){
+  if(dist<scene.radius&&facing>.45&&player.actualSpeed<.5&&!inputHeld()&&!(walker&&walker.action)){
    const dwell=(sceneDwell.get(scene.id)||0)+dt;sceneDwell.set(scene.id,dwell);
    if(dwell>1.6&&showNotice('scene',scene.id,scene.name,scene.words,readingSeconds(scene.words)))seenScenes.add(scene.id);
   }else sceneDwell.delete(scene.id);
@@ -1004,8 +1163,10 @@ function frame(now){
  render();requestAnimationFrame(frame);
 }requestAnimationFrame(frame);
 
-function stopMovement(){resetMotion(player);resetCameraHistory();footDistance=0;feetMoving=false;}
+// Grid mode: input is cleared, and a step already under way lands on its cell (at most 0.21 s); nothing repeats.
+function stopMovement(){if(GRID_MODE){pendingCommand=null;keyOrder=[];return;}resetMotion(player);resetCameraHistory();footDistance=0;feetMoving=false;}
 function settleInput(){
+ if(GRID_MODE)return;
  const i=readMovementInput(gestures.held?gestures.value:null,keys);
  if(!i.turn)player.yawRate=0;
  if(!i.forward&&!i.strafe){player.localForward=player.localSide=player.vx=player.vz=player.actualSpeed=player.travelled=player.blockedFor=player.runSeconds=player.surge=0;resetCameraHistory();footDistance=0;feetMoving=false;}
@@ -1013,21 +1174,29 @@ function settleInput(){
 function releaseCapture(id){if(id!==null&&canvas.hasPointerCapture(id))canvas.releasePointerCapture(id);}
 canvas.addEventListener('pointerdown',e=>{
  if(!started||paused||contextLost)return;
+ if(GRID_MODE){
+  if(!gridGesture.begin(e,canvas.getBoundingClientRect(),e.timeStamp/1000))return;
+  e.preventDefault();canvas.setPointerCapture(e.pointerId);canvas.focus({preventScroll:true});resumeAudio();return;
+ }
  const old=gestures.id,claimed=gestures.begin(e,canvas.getBoundingClientRect());
  if(old!==null&&!gestures.held){stopMovement();releaseCapture(old);}
  if(!claimed)return;
  e.preventDefault();canvas.setPointerCapture(e.pointerId);canvas.focus({preventScroll:true});resumeAudio();
 });
 canvas.addEventListener('pointermove',e=>{
+ if(GRID_MODE){if(gridGesture.move(e))e.preventDefault();return;}
  const wasHeld=gestures.held;
  if(gestures.move(e))e.preventDefault();else if(wasHeld&&!gestures.held)settleInput();
 });
-function finishPointer(e){const owner=gestures.id;if(gestures.end(e)){settleInput();releaseCapture(owner);}}
+function finishPointer(e){
+ if(GRID_MODE){const owner=gridGesture.id,result=gridGesture.end(e,e.timeStamp/1000);if(result){if(result==='tap'&&started&&!paused)pendingCommand='forward';releaseCapture(owner);}return;}
+ const owner=gestures.id;if(gestures.end(e)){settleInput();releaseCapture(owner);}
+}
 // Capture-phase window listeners also see releases outside the canvas after capture was lost.
 addEventListener('pointerup',finishPointer,true);addEventListener('pointercancel',finishPointer,true);
-canvas.addEventListener('lostpointercapture',e=>{if(e.pointerId===gestures.id)resetInput();});
+canvas.addEventListener('lostpointercapture',e=>{if(e.pointerId===(GRID_MODE?gridGesture.id:gestures.id))resetInput();});
 canvas.addEventListener('contextmenu',e=>e.preventDefault());
-const gameKeys=new Set(['KeyW','KeyA','KeyS','KeyD','KeyQ','KeyE','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','ShiftLeft','ShiftRight']);
+const gameKeys=new Set(['KeyW','KeyA','KeyS','KeyD','KeyQ','KeyE','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','ShiftLeft','ShiftRight']);if(GRID_MODE)gameKeys.add('KeyM');
 addEventListener('keydown',e=>{
  if(!started&&e.code==='Enter'){begin();return;}
  if(started&&e.code==='KeyH'&&!e.repeat){e.preventDefault();if(paused)closeBook();else openBook();return;}
@@ -1037,12 +1206,14 @@ addEventListener('keydown',e=>{
   // A physically held key can keep repeating after a dialog or blur cleared it.
   // Only a fresh press may start movement again.
   if(e.repeat&&!keys.has(e.code))return;
+  if(GRID_MODE&&!e.repeat){const command=keyCommand(e.code);if(command){pendingCommand=command;keyOrder=keyOrder.filter(k=>k!==e.code).concat(e.code);}}
   keys.add(e.code);resumeAudio();
  }
+ if(GRID_MODE&&started&&!paused&&e.code==='KeyM'&&!e.repeat){automapShown=!automapShown;automapKey=null;drawAutomap();}
  if(e.code==='Escape')resetInput();
 });
-addEventListener('keyup',e=>{keys.delete(e.code);settleInput();});
-function resetInput(){keys.clear();const owner=gestures.reset();stopMovement();releaseCapture(owner);}
+addEventListener('keyup',e=>{keys.delete(e.code);keyOrder=keyOrder.filter(k=>k!==e.code);settleInput();});
+function resetInput(){keys.clear();const owner=GRID_MODE?gridGesture.reset():gestures.reset();stopMovement();releaseCapture(owner);}
 addEventListener('blur',resetInput);addEventListener('orientationchange',resetInput);
 canvas.addEventListener('blur',resetInput);
 function suspendAudio(){if(audioCtx&&audioCtx.state!=='closed')audioCtx.suspend().catch(()=>{});}
@@ -1135,6 +1306,31 @@ function updateFootsteps(distance,dt){
  if(footDistance>=stride){footDistance%=stride;footstep(surfaceAt(player.x,player.z),speed);}
 }
 function chime(){if(!audioCtx||audioCtx.state!=='running')return;for(const [i,f] of [523.25,783.99].entries()){const o=audioCtx.createOscillator(),g=audioCtx.createGain(),t=audioCtx.currentTime+i*.15;o.type='sine';o.frequency.value=f;g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(.035,t+.03);g.gain.exponentialRampToValueAtTime(.0001,t+2);o.connect(g);g.connect(master);o.start(t);o.stop(t+2);}}
+// A small hand-drawn automap of visited cells, as in a dungeon crawler. North is always up.
+const automap=document.querySelector('#automap'),automapCtx=automap?.getContext('2d');
+function drawAutomap(){
+ if(!walker||!automapCtx)return;
+ const key=walker.i+','+walker.j+','+walker.heading+','+walker.visited.size+','+automapShown;
+ if(key===automapKey)return;automapKey=key;
+ automap.hidden=!automapShown;if(!automapShown)return;
+ const ratio=Math.min(devicePixelRatio||1,2),size=112,radius=7,unit=size/(radius*2+1);
+ if(automap.width!==size*ratio){automap.width=automap.height=size*ratio;}
+ const c=automapCtx;c.setTransform(ratio,0,0,ratio,0,0);c.clearRect(0,0,size,size);
+ c.fillStyle='#eef0e4b8';c.fillRect(0,0,size,size);
+ c.fillStyle='#8fa596';
+ for(const [di,dj] of automapCells(walker,radius))c.fillRect((di+radius)*unit+.5,(dj+radius)*unit+.5,unit-1,unit-1);
+ const cx=(radius+.5)*unit,cy=(radius+.5)*unit,a=walker.heading*Math.PI/2;
+ c.save();c.translate(cx,cy);c.rotate(a);c.fillStyle='#2f4a40';c.beginPath();c.moveTo(0,-unit*.62);c.lineTo(unit*.45,unit*.42);c.lineTo(-unit*.45,unit*.42);c.closePath();c.fill();c.restore();
+ c.fillStyle='#2f4a40';c.font='10px sans-serif';c.textAlign='left';c.fillText('N',4,12);
+ automap.setAttribute('aria-label','地図：'+HEADING_NAMES[walker.heading]+'を向いています。歩いたマス '+walker.visited.size);
+}
+if(GRID_MODE){
+ document.body.classList.add('grid-mode');
+ canvas.setAttribute('aria-label',canvas.getAttribute('aria-label').split('。')[0]+'。マス目を一つずつ歩きます。W/Sで一マス前後、A/Dで横へ一マス、Q/Eまたは左右矢印で90度向きを変えます。画面下半分で上下に滑らせると前後、左右で向きを変えます。軽く触れると一マス進みます。');
+ const notes=document.querySelector('.notes p');if(notes)notes.innerHTML='マス目をひとつずつ歩く試作版。画面の下半分で、上へ滑らせて前進、<br>下で後退、左右で90度の向き替え。軽く触れると一マス。PCは W A S D · Q E · ← →。';
+ const book=document.querySelector('.book-controls');
+ if(book)book.innerHTML='<h3>マス目を歩く</h3><p>画面の下半分で上へ滑らせると一マス前へ。<br>保持すると歩き続けます。下で後退、左右で90度の向き替え。<br>軽く触れると一マス進みます。</p><p class="keyboard-notes">PC：W / S で前後 ／ A / D で横へ一マス ／ Q E ・ ← → で向き替え<br>Shift で早足 ／ M で地図 ／ H でしおり ／ Esc で入力解除</p>';
+}
 function begin(){if(started||contextLost)return;started=true;notices.clear();document.body.classList.add('playing');canvas.focus();audio();}
 const beginButton=document.querySelector('#begin');beginButton.addEventListener('click',begin);beginButton.disabled=false;beginButton.removeAttribute('aria-busy');
 // A lost GPU context leaves a blank island: release input, stop footsteps, greetings and sound, and ask for a reload.
@@ -1143,7 +1339,7 @@ canvas.addEventListener('webglcontextlost',()=>{
  const error=document.querySelector('#error');error.textContent='島を読み込めませんでした。ページを開き直してください。';error.hidden=false;
 });
 // Minimal diagnostic state for development; no interface is added during play.
-window.nagi={get release(){return document.querySelector('meta[name="nagi-release"]')?.content||'local'},get position(){return{x:player.x,z:player.z,yaw:player.yaw}},get camera(){return{...camera}},get turningRate(){return player.yawRate},get continuousRun(){return player.runSeconds},get surge(){return player.surge},get collisionChecks(){return collisionWorld.checks},get actualSpeed(){return player.actualSpeed},get blockedFor(){return player.blockedFor},get monuments(){return monuments.length},get renderedVertices(){return drawnVertices},get drawCalls(){return drawCalls},get started(){return started},get speed(){return Math.hypot(player.vx,player.vz)},get dragging(){return gestures.held},get fov(){return CAMERA_FOV},get greetingDistance(){return lastGreetingDistance},get footsteps(){return footstepCount},get audioState(){return audioCtx?.state||'unavailable'},get footSurface(){return lastFootSurface},get worldVertices(){return terrain.count+roadChunks.reduce((n,b)=>n+b.count,0)+world.count+sea.count+scenery.reduce((n,b)=>n+b.count,0)+movingSails.reduce((n,b)=>n+b.count,0)+birdMesh.count},get places(){return [...shownPlaces]},get islanders(){return npcs.length},get greeted(){return npcs.reduce((a,n)=>a+n.index,0)}};
+window.nagi={get release(){return document.querySelector('meta[name="nagi-release"]')?.content||'local'},get position(){return{x:player.x,z:player.z,yaw:player.yaw}},get camera(){return{...camera}},get turningRate(){return player.yawRate},get continuousRun(){return player.runSeconds},get surge(){return player.surge},get collisionChecks(){return collisionWorld.checks},get actualSpeed(){return player.actualSpeed},get blockedFor(){return player.blockedFor},get monuments(){return monuments.length},get renderedVertices(){return drawnVertices},get drawCalls(){return drawCalls},get started(){return started},get speed(){return Math.hypot(player.vx,player.vz)},get dragging(){return gestures.held},get fov(){return CAMERA_FOV},get greetingDistance(){return lastGreetingDistance},get footsteps(){return footstepCount},get audioState(){return audioCtx?.state||'unavailable'},get footSurface(){return lastFootSurface},get worldVertices(){return terrain.count+roadChunks.reduce((n,b)=>n+b.count,0)+world.count+sea.count+scenery.reduce((n,b)=>n+b.count,0)+movingSails.reduce((n,b)=>n+b.count,0)+birdMesh.count},get places(){return [...shownPlaces]},get islanders(){return npcs.length},get greeted(){return npcs.reduce((a,n)=>a+n.index,0)},get grid(){return walker?{i:walker.i,j:walker.j,heading:walker.heading,steps:walker.steps,turns:walker.turns,bumps:walker.bumps,visited:walker.visited.size,busy:walker.busy,automap:!automap.hidden}:null}};
 
 </script>
 </body></html>

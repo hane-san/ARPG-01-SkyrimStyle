@@ -28,6 +28,8 @@ Read [docs/DESIGN.md](docs/DESIGN.md), [docs/DECISIONS.md](docs/DECISIONS.md),
 
 ## Game-specific invariants
 
+0. **Default travel is grid-based (producer decision 2026-11-04, D006).** The root entrance walks the same island one 3 m cell at a time (`dist/grid.js`): quarter turns, side-steps, held repeat, tap-to-step, bumps without footsteps, automap. `?grid=0` keeps the earlier free walking; invariants 3 and 4 below describe that free mode and its regression checks. Combat, parties and dungeon interiors are planned by the producer but not yet adopted as specifications; add them only through an Issue.
+
 1. `dist/` contains the game sources. Keep its layout. `scripts/build.mjs` produces `dist/nagi-standalone.html`, the dist manifest and existing icon; do not hand-edit generated files or introduce an unrelated build framework.
 2. `dist/movement.js` owns gesture input, continuous acceleration, collision detection and spatial indexing; no DOM, WebGL or audio dependencies. `dist/terrain.js` owns the static terrain, routes, landmarks and shared triangle-height cache. `dist/island.js` connects events, fixed 60Hz simulation, rendering, islanders and audio.
 3. One-finger origin is neutral. Vertical slide moves forward/back; horizontal slide always turns. Keep keyboard A/D strafing separate. Releasing, cancelling, losing capture, multitouch, blur, rotation and backgrounding clear input; recovery cannot retain movement.

@@ -19,7 +19,7 @@ with sync_playwright() as p:
  browser=p.chromium.launch(executable_path=os.environ.get('CHROMIUM_PATH','/usr/bin/chromium'),headless=True,args=['--no-sandbox','--use-angle=swiftshader','--enable-unsafe-swiftshader'])
  page=browser.new_page(viewport={'width':1000,'height':700});errors=[];page.on('pageerror',lambda e:errors.append(str(e)))
  page.route('**/island.js?*',lambda r:r.fulfill(status=200,content_type='application/javascript',body=(root/'dist/island.js').read_text()+probe))
- page.goto('http://127.0.0.1:4176/',wait_until='networkidle');page.wait_for_function('!!window._skyQA')
+ page.goto('http://127.0.0.1:4176/?grid=0',wait_until='networkidle');page.wait_for_function('!!window._skyQA')
  a=page.evaluate('_skyQA(0)');b=page.evaluate('_skyQA(.2)');c=page.evaluate('_skyQA(Math.PI)');d=page.evaluate('_skyQA(Math.PI*2)')
  assert a['count']>30 and b['count']>30,(a,b)
  assert b['x']>a['x']+70,(a,b)
