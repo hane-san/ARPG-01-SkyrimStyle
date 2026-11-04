@@ -110,14 +110,14 @@ button:focus-visible{outline:2px solid #385e4b;outline-offset:4px}
 }
 
 /* Opt-in grid mode (?grid=1): a small automap below the travel book button, clear of the lower touch half. */
-#automap{position:fixed;inset:auto;top:calc(var(--safe-top) + 72px);right:max(4vw,var(--safe-right));width:112px;height:112px;border:1px solid #5d786b55;pointer-events:none;opacity:.85}
+#automap{position:fixed;inset:auto;top:calc(var(--safe-top) + 68px);right:max(4vw,var(--safe-right));width:148px;height:148px;border:1px solid #f3f0e255;border-radius:6px;box-shadow:0 4px 18px #1d2e2a40;pointer-events:none}
 #automap[hidden],body:not(.playing) #automap{display:none}
 .reading #automap{opacity:0}
 
-@media(max-width:700px),(pointer:coarse){.grid-mode #greeting{top:calc(var(--safe-top) + 198px)}}
+@media(max-width:700px),(pointer:coarse){.grid-mode #greeting{top:calc(var(--safe-top) + 230px)}}
 @media(max-height:600px) and (orientation:landscape){
- #automap{top:calc(var(--safe-top) + 12px);right:calc(max(4vw,var(--safe-right)) + 56px);width:88px;height:88px}
- .grid-mode #greeting{top:calc(var(--safe-top) + 70px);max-width:calc(100vw - 12vw - 170px)}
+ #automap{top:calc(var(--safe-top) + 12px);right:calc(max(4vw,var(--safe-right)) + 56px);width:112px;height:112px}
+ .grid-mode #greeting{top:calc(var(--safe-top) + 70px);max-width:calc(100vw - 12vw - 200px)}
 }
 
 </style></head>
@@ -467,29 +467,35 @@ class JourneyNotices {
  setEnabled(enabled){this.enabled=enabled;this.clear();}
 }
 
-// Grid travel for the opt-in dungeon-crawler mode (?grid=1): one cell per step, quarter turns.
+// Grid travel (the default dungeon-crawler mode): one cell per step, quarter turns.
 // No DOM, WebGL or audio. The world supplies walkable(), height() and the swept move() of CollisionWorld.
-const gridEase=t=>t*t*(3-2*t);
-const CELL=3,STEP_SECONDS=.21,QUICK_STEP_SECONDS=.15,TURN_SECONDS=.18,TURN_REPEAT_PAUSE=.14,BUMP_SECONDS=.18,EYE_HEIGHT=1.65;
+// 4.5 m cells. A held walk glides through cells at a constant 18.75 m/s (Shift: about 26 m/s);
+// it eases in from rest and eases out when the finger or key lets go, instead of pausing at every cell.
+const CELL=4.5,GRID_ORIGIN=Object.freeze([8,30]),STEP_SECONDS=.24,QUICK_STEP_SECONDS=.17,TURN_SECONDS=.18,TURN_REPEAT_PAUSE=.14,BUMP_SECONDS=.18,EYE_HEIGHT=1.65;
 // Headings are compass quarters: 0 north (-z), 1 east (+x), 2 south (+z), 3 west (-x).
 const HEADINGS=Object.freeze([[0,-1],[1,0],[0,1],[-1,0]]);
 const HEADING_NAMES=Object.freeze(['北','東','南','西']);
 const headingYaw=h=>-((h%4+4)%4)*Math.PI/2;
 function nearestHeading(yaw){return ((Math.round(-yaw/(Math.PI/2))%4)+4)%4;}
 const wrapQuarterAngle=a=>Math.atan2(Math.sin(a),Math.cos(a));
+const turnEase=t=>t*t*(3-2*t);
+// Cubic Hermite from 0 to 1 with start/end slopes m0/m1 (in units of the whole move per duration).
+function hermite(w,m0,m1){const w2=w*w,w3=w2*w;return (w3-2*w2+w)*m0+(-2*w3+3*w2)+(w3-w2)*m1;}
+function hermiteSlope(w,m0,m1){return (3*w*w-4*w+1)*m0+(6*w-6*w*w)+(3*w*w-2*w)*m1;}
 const COMMANDS=Object.freeze(['forward','back','strafeLeft','strafeRight','turnLeft','turnRight']);
 // Movement direction relative to the current heading, in quarter turns.
 const MOVE_OFFSET={forward:0,strafeRight:1,back:2,strafeLeft:3};
 
 class GridWalker {
- constructor(world,{origin=[0,0],cell=CELL,i=0,j=0,heading=0}={}){
+ constructor(world,{origin=GRID_ORIGIN,cell=CELL,i=0,j=0,heading=0}={}){
   this.world=world;this.origin=origin;this.cell=cell;this.i=i;this.j=j;this.heading=(heading%4+4)%4;
   const [x,z]=this.center(i,j);this.x=x;this.z=z;this.y=world.height(x,z)+EYE_HEIGHT;this.yaw=headingYaw(this.heading);
-  this.action=null;this.cooldown=0;this.steps=0;this.turns=0;this.bumps=0;this.travelled=0;this.speed=0;
+  this.action=null;this.cooldown=0;this.steps=0;this.turns=0;this.bumps=0;this.travelled=0;this.speed=0;this.carry=null;
   this.edges=new Map();this.visited=new Set([this.key(i,j)]);
  }
  key(i,j){return i+','+j;}
  center(i,j){return [this.origin[0]+i*this.cell,this.origin[1]+j*this.cell];}
+ cellOf(x,z){return [Math.round((x-this.origin[0])/this.cell),Math.round((z-this.origin[1])/this.cell)];}
  get busy(){return this.action!==null||this.cooldown>0;}
  // A step is legal only when the swept body reaches the next centre exactly: no water, no props, no sliding.
  canStep(i,j,ni,nj){
@@ -502,8 +508,10 @@ class GridWalker {
   return ok;
  }
  // Starts a command. Returns 'step', 'turn', 'blocked', or null while a previous action is still playing.
- command(name,{quick=false}={}){
+ // hold: the input is still held, so the step leaves its cell at full speed instead of slowing to a stop.
+ command(name,{quick=false,hold=false}={}){
   if(this.busy||!COMMANDS.includes(name))return null;
+  const carry=this.carry;this.carry=null;
   if(name==='turnLeft'||name==='turnRight'){
    const from=this.yaw,to=headingYaw(this.heading+(name==='turnRight'?1:-1)),delta=wrapQuarterAngle(to-from);
    this.heading=(this.heading+(name==='turnRight'?1:3))%4;this.turns++;
@@ -515,43 +523,90 @@ class GridWalker {
    this.bumps++;this.action={kind:'bump',t:0,duration:BUMP_SECONDS,ax,az,dx,dz};return 'blocked';
   }
   this.i=ni;this.j=nj;this.visited.add(this.key(ni,nj));this.steps++;
-  this.action={kind:'step',t:0,duration:quick?QUICK_STEP_SECONDS:STEP_SECONDS,ax,az,bx,bz};return 'step';
+  const duration=quick?QUICK_STEP_SECONDS:STEP_SECONDS;
+  // Arriving speed carries into a step in the same direction, so a held walk never pauses between cells.
+  const m0=carry&&carry.dx===dx&&carry.dz===dz?Math.min(1.6,carry.speed*duration/this.cell):0;
+  this.action={kind:'step',t:0,duration,ax,az,bx,bz,dx,dz,s0:0,m0,m1:hold?1:0};
+  // A chained step also uses the part of this frame left over after landing, so the glide never hitches.
+  if(m0>0&&carry.spare>0){
+   const a=this.action;a.t=Math.min(duration,carry.spare);const s=hermite(a.t/duration,m0,a.m1),px=this.x,pz=this.z;
+   this.x=ax+(bx-ax)*s;this.z=az+(bz-az)*s;this.y=this.world.height(this.x,this.z)+EYE_HEIGHT;
+   this.travelled+=Math.hypot(this.x-px,this.z-pz);this.speed=this.travelled/carry.frame;
+  }
+  return 'step';
+ }
+ // The held input ended or changed: finish the current step by slowing to a stop on its cell.
+ easeOut(){
+  const a=this.action;if(!a||a.kind!=='step'||a.m1===0)return;
+  const w=a.t/a.duration,s=a.s0+(1-a.s0)*hermite(w,a.m0,a.m1),rest=a.duration-a.t;
+  if(1-s<1e-4||rest<1e-4){a.m1=0;return;}
+  const velocity=(1-a.s0)*hermiteSlope(w,a.m0,a.m1)/a.duration;
+  Object.assign(a,{t:0,duration:rest,s0:s,m0:Math.min(3,velocity*rest/(1-s)),m1:0});
  }
  // Advances the current animation. Returns the action kind that finished during this update, if any.
  update(dt){
   this.travelled=0;this.speed=0;
   if(!(dt>0&&Number.isFinite(dt)))return null;
-  if(!this.action){this.cooldown=Math.max(0,this.cooldown-dt);return null;}
-  const a=this.action;a.t=Math.min(a.duration,a.t+dt);const u=gridEase(a.t/a.duration);
+  if(!this.action){this.carry=null;this.cooldown=Math.max(0,this.cooldown-dt);return null;}
+  const a=this.action,spare=a.t+dt-a.duration;a.t=Math.min(a.duration,a.t+dt);const w=a.t/a.duration;
   const px=this.x,pz=this.z;
-  if(a.kind==='step'){this.x=a.ax+(a.bx-a.ax)*u;this.z=a.az+(a.bz-a.az)*u;}
-  else if(a.kind==='bump'){const push=Math.sin(Math.PI*a.t/a.duration)*.22;this.x=a.ax+a.dx*push;this.z=a.az+a.dz*push;}
-  else this.yaw=a.fromYaw+a.deltaYaw*u;
+  if(a.kind==='step'){const s=a.s0+(1-a.s0)*hermite(w,a.m0,a.m1);this.x=a.ax+(a.bx-a.ax)*s;this.z=a.az+(a.bz-a.az)*s;}
+  else if(a.kind==='bump'){const push=Math.sin(Math.PI*w)*.22;this.x=a.ax+a.dx*push;this.z=a.az+a.dz*push;}
+  else this.yaw=a.fromYaw+a.deltaYaw*turnEase(w);
   this.y=this.world.height(this.x,this.z)+EYE_HEIGHT;
   if(a.kind==='step'){this.travelled=Math.hypot(this.x-px,this.z-pz);this.speed=this.travelled/dt;}
   if(a.t<a.duration)return null;
   // Land exactly on the grid: no accumulated drift after hundreds of steps.
   if(a.kind==='turn'){this.yaw=headingYaw(this.heading);this.cooldown=TURN_REPEAT_PAUSE;}
   else{[this.x,this.z]=this.center(this.i,this.j);this.y=this.world.height(this.x,this.z)+EYE_HEIGHT;}
+  if(a.kind==='step'&&a.m1>0)this.carry={dx:a.dx,dz:a.dz,speed:(1-a.s0)*a.m1*this.cell/a.duration,spare:Math.max(0,spare),frame:dt};
   this.action=null;return a.kind;
  }
+}
+
+// Roads follow the grid: each route vertex snaps to its cell, and each leg becomes a 4-connected staircase
+// of cell centres that stays within half a cell of the original line.
+function gridCells(points,origin=GRID_ORIGIN,cell=CELL){
+ const snap=([x,z])=>[Math.round((x-origin[0])/cell),Math.round((z-origin[1])/cell)];
+ const cells=[snap(points[0])];
+ for(let k=1;k<points.length;k++){
+  const [ai,aj]=cells[cells.length-1],[bi,bj]=snap(points[k]),di=Math.abs(bi-ai),dj=Math.abs(bj-aj),si=Math.sign(bi-ai),sj=Math.sign(bj-aj);
+  let i=0,j=0;
+  while(i<di||j<dj){
+   if(j>=dj||(i<di&&(i+.5)/di<(j+.5)/dj))i++;else j++;
+   cells.push([ai+si*i,aj+sj*j]);
+  }
+ }
+ return cells;
+}
+// The same staircase as a polyline through cell centres, merging straight runs.
+function gridRoute(points,origin=GRID_ORIGIN,cell=CELL){
+ const cells=gridCells(points,origin,cell),out=[cells[0]];
+ for(let k=1;k<cells.length;k++){
+  const last=out[out.length-1],prev=out.length>1?out[out.length-2]:null,c=cells[k];
+  if(c[0]===last[0]&&c[1]===last[1])continue;
+  if(prev&&(prev[0]===last[0]&&last[0]===c[0]||prev[1]===last[1]&&last[1]===c[1]))out[out.length-1]=c;else out.push(c);
+ }
+ return out.map(([i,j])=>[origin[0]+i*cell,origin[1]+j*cell]);
 }
 
 // Keyboard: W/S or ↑/↓ step, A/D side-step, Q/E or ←/→ turn a quarter. The newest held key wins.
 const KEY_COMMANDS={KeyW:'forward',ArrowUp:'forward',KeyS:'back',ArrowDown:'back',KeyA:'strafeLeft',KeyD:'strafeRight',KeyQ:'turnLeft',ArrowLeft:'turnLeft',KeyE:'turnRight',ArrowRight:'turnRight'};
 function keyCommand(code){return KEY_COMMANDS[code]||null;}
 
-// Touch: one finger in the lower half. Slide up/down to step forward/back, left/right to turn.
-// Holding keeps repeating; a short tap is one step forward. Multitouch cancels everything.
-const SWIPE_DISTANCE=22,TAP_DISTANCE=10,TAP_SECONDS=.3;
-function swipeCommand(dx,dy){
+// Touch: one finger in the lower half. Slide up/down to step forward/back (back keeps facing forward).
+// A quick sideways flick turns a quarter. A sideways slide that starts after the finger has rested or walked
+// for HOLD_SECONDS side-steps instead (crab walk). Holding repeats; a short tap is one step forward.
+const SWIPE_DISTANCE=22,TAP_DISTANCE=10,TAP_SECONDS=.3,HOLD_SECONDS=.3;
+function swipeCommand(dx,dy,crab=false){
  if(Math.hypot(dx,dy)<SWIPE_DISTANCE)return null;
- return Math.abs(dy)>=Math.abs(dx)?(dy<0?'forward':'back'):(dx<0?'turnLeft':'turnRight');
+ if(Math.abs(dy)>=Math.abs(dx))return dy<0?'forward':'back';
+ return crab?(dx<0?'strafeLeft':'strafeRight'):(dx<0?'turnLeft':'turnRight');
 }
 class GridGesture {
- constructor(){this.contacts=new Set();this.id=null;this.origin=null;this.started=0;this.command=null;this.blocked=false;this.moved=false;}
+ constructor(){this.contacts=new Set();this.id=null;this.origin=null;this.started=0;this.command=null;this.blocked=false;this.moved=false;this.sideways=null;}
  get held(){return this.id!==null;}
- clearOwner(){const id=this.id;this.id=null;this.origin=null;this.command=null;this.moved=false;return id;}
+ clearOwner(){const id=this.id;this.id=null;this.origin=null;this.command=null;this.moved=false;this.sideways=null;return id;}
  reset(){const id=this.clearOwner();this.contacts.clear();this.blocked=false;return id;}
  begin(e,bounds,now){
   if(e.button>0)return false;
@@ -561,14 +616,20 @@ class GridGesture {
    if(this.blocked)return false;
   }
   if(this.held||e.clientY-bounds.top<bounds.height*.5)return false;
-  this.id=e.pointerId;this.origin={x:e.clientX,y:e.clientY};this.started=now;this.command=null;this.moved=false;return true;
+  this.id=e.pointerId;this.origin={x:e.clientX,y:e.clientY};this.started=now;this.command=null;this.moved=false;this.sideways=null;return true;
  }
- move(e){
+ move(e,now){
   if(e.pointerId!==this.id)return false;
-  if(e.pointerType==='mouse'&&(e.buttons&1)===0){this.end(e);return false;}
+  if(e.pointerType==='mouse'&&(e.buttons&1)===0){this.end(e,now);return false;}
   const dx=e.clientX-this.origin.x,dy=e.clientY-this.origin.y;
   if(Math.hypot(dx,dy)>TAP_DISTANCE)this.moved=true;
-  this.command=swipeCommand(dx,dy);return true;
+  const direction=swipeCommand(dx,dy);
+  if(direction==='turnLeft'||direction==='turnRight'){
+   // Decide once per sideways slide: a flick turns, a slide after resting or walking crabs.
+   if(this.sideways===null)this.sideways=now-this.started>=HOLD_SECONDS?'crab':'turn';
+   this.command=swipeCommand(dx,dy,this.sideways==='crab');
+  }else{this.sideways=null;this.command=direction;}
+  return true;
  }
  // Returns 'tap' when the release was a short, still press; otherwise true/false for ownership.
  end(e,now){
@@ -623,7 +684,52 @@ function box(x,y,z,w,h,d,col){const a=[x-w/2,y,z-d/2],b=[x+w/2,y,z-d/2],c=[x+w/2
 function branch(a,b,r,col){let axis=b.map((v,i)=>v-a[i]);const len=Math.hypot(...axis);axis=axis.map(x=>x/len);let u=Math.abs(axis[1])<.9?[0,1,0]:[1,0,0];u=[axis[1]*u[2]-axis[2]*u[1],axis[2]*u[0]-axis[0]*u[2],axis[0]*u[1]-axis[1]*u[0]];const n=Math.hypot(...u);u=u.map(x=>x/n);const v=[axis[1]*u[2]-axis[2]*u[1],axis[2]*u[0]-axis[0]*u[2],axis[0]*u[1]-axis[1]*u[0]];for(let i=0;i<6;i++){const pt=(p,i,r)=>p.map((p,j)=>p+r*(u[j]*Math.cos(i*Math.PI/3)+v[j]*Math.sin(i*Math.PI/3)));quad(pt(a,i,r),pt(a,i+1,r),pt(b,i+1,r*.65),pt(b,i,r*.65),col);}}
 function torus(x,y,z,r,t,col,vertical=false){for(let i=0;i<24;i++)for(let j=0;j<5;j++){function p(i,j){const a=i/24*Math.PI*2,b=j/5*Math.PI*2,rr=r+t*Math.cos(b);return vertical?[x+rr*Math.cos(a),y+rr*Math.sin(a),z+t*Math.sin(b)]:[x+rr*Math.cos(a),y+t*Math.sin(b),z+rr*Math.sin(a)]}quad(p(i,j),p(i+1,j),p(i+1,j+1),p(i,j+1),col);}}
 function batch(){const arr=new Float32Array(data);const buffer=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,buffer);gl.bufferData(gl.ARRAY_BUFFER,arr,gl.STATIC_DRAW);const b={buffer,count:data.length/9};data=[];return b;}
-const path=routes[0];
+// Grid mode lays the roads on the grid and puts every prop that blocks a step at a cell centre, so a cell is
+// either open or taken: no half-blocked edges, no posts in the middle of a road. Free walking (?grid=0) keeps the
+// original layout. Terrain heights never change; only drawn roads and prop positions follow the grid.
+const travelRoutes=GRID_MODE?routes.map(points=>gridRoute(points,GRID_ORIGIN,CELL)):routes;
+const routeDistance=(x,z)=>distanceToRoute(x,z,travelRoutes);
+const roadCells=new Set(),claimedCells=new Set();
+if(GRID_MODE)for(const points of routes)for(const [i,j] of gridCells(points,GRID_ORIGIN,CELL))roadCells.add(i+','+j);
+const cellIndex=(x,z)=>[Math.round((x-GRID_ORIGIN[0])/CELL),Math.round((z-GRID_ORIGIN[1])/CELL)];
+const cellCentre=(i,j)=>[GRID_ORIGIN[0]+i*CELL,GRID_ORIGIN[1]+j*CELL];
+// Props never take a pinch cell: one whose open neighbours would lose their local connection (judged on the bare
+// terrain within three cells, with already-taken cells counted as blocked). Sandbars and narrow shores stay passable.
+const terrainSteps=GRID_MODE?new GridWalker(new CollisionWorld([],{height,walkable}),{origin:GRID_ORIGIN,cell:CELL}):null;
+const QUARTERS=[[0,-1],[1,0],[0,1],[-1,0]];
+function pinchCell(i,j){
+ const open=QUARTERS.map(([di,dj])=>[i+di,j+dj]).filter(([a,b])=>!claimedCells.has(a+','+b)&&terrainSteps.canStep(i,j,a,b));
+ if(open.length<2)return false;
+ const seen=new Set([open[0].join(',')]),queue=[open[0]];
+ while(queue.length){
+  const [a,b]=queue.pop();
+  for(const [di,dj] of QUARTERS){
+   const c=a+di,d=b+dj,key=c+','+d;
+   if((c===i&&d===j)||Math.abs(c-i)>3||Math.abs(d-j)>3||seen.has(key)||claimedCells.has(key)||!terrainSteps.canStep(a,b,c,d))continue;
+   seen.add(key);queue.push([c,d]);
+  }
+ }
+ return open.some(c=>!seen.has(c.join(',')));
+}
+// The nearest free, dry cell (searching up to two rings when asked). Roads and taken cells are skipped.
+function claimCell(x,z,search=false){
+ const [i0,j0]=cellIndex(x,z);let best=null;
+ for(let ring=0;ring<=(search?2:0)&&!best;ring++)for(let dj=-ring;dj<=ring;dj++)for(let di=-ring;di<=ring;di++){
+  if(Math.max(Math.abs(di),Math.abs(dj))!==ring)continue;
+  const key=(i0+di)+','+(j0+dj),[cx,cz]=cellCentre(i0+di,j0+dj);
+  if(roadCells.has(key)||claimedCells.has(key)||!walkable(cx,cz)||pinchCell(i0+di,j0+dj))continue;
+  const d=Math.hypot(cx-x,cz-z);if(!best||d<best.d)best={key,cx,cz,d};
+ }
+ if(!best)return null;claimedCells.add(best.key);return [best.cx,best.cz];
+}
+// Gateways stay on their road cell: the path runs straight through between their posts.
+function gatewayCell(x,z){if(!GRID_MODE)return [x,z];const [i,j]=cellIndex(x,z);claimedCells.add(i+','+j);return cellCentre(i,j);}
+function gridProp(place,blocks=()=>true,search=false){
+ if(!GRID_MODE)return place;
+ return (x,z,...rest)=>{if(!blocks(...rest))return place(x,z,...rest);const c=claimCell(x,z,search);return c?place(c[0],c[1],...rest):undefined;};
+}
+const [tx,tz]=gatewayCell(23,8),[sx,sz]=gatewayCell(-4,-13);
+const path=travelRoutes[0];
 const tintBlend=(a,b,t)=>a.map((v,i)=>v+(b[i]-v)*t);
 function terrainColor(x,z){
  const h=height(x,z);
@@ -646,9 +752,11 @@ function terrainColor(x,z){
 }
 // Clip path ribbons to the exact ground triangles: continuous paths without hovering over hills.
 const roadSegments=[];
-for(const points of routes)for(let i=1;i<points.length;i++){
- const [ax,az]=points[i-1],[bx,bz]=points[i],len=Math.hypot(bx-ax,bz-az),w=Math.min(az,bz)<-128?4.2:1.45,nx=-(bz-az)/len*w,nz=(bx-ax)/len*w;
- roadSegments.push({polygon:[[ax+nx,az+nz],[bx+nx,bz+nz],[bx-nx,bz-nz],[ax-nx,az-nz]],minX:Math.min(ax,bx)-w,maxX:Math.max(ax,bx)+w,minZ:Math.min(az,bz)-w,maxZ:Math.max(az,bz)+w,ends:[[ax,az],[bx,bz]],w});
+for(const points of travelRoutes)for(let i=1;i<points.length;i++){
+ const [ax,az]=points[i-1],[bx,bz]=points[i],len=Math.hypot(bx-ax,bz-az),w=GRID_MODE?(Math.min(az,bz)<-128?2.1:1.6):Math.min(az,bz)<-128?4.2:1.45,nx=-(bz-az)/len*w,nz=(bx-ax)/len*w;
+ // Grid roads turn square corners: each straight run reaches half a road width past its end.
+ const ex=GRID_MODE?(bx-ax)/len*w:0,ez=GRID_MODE?(bz-az)/len*w:0;
+ roadSegments.push({polygon:[[ax-ex+nx,az-ez+nz],[bx+ex+nx,bz+ez+nz],[bx+ex-nx,bz+ez-nz],[ax-ex-nx,az-ez-nz]],minX:Math.min(ax,bx)-w,maxX:Math.max(ax,bx)+w,minZ:Math.min(az,bz)-w,maxZ:Math.max(az,bz)+w,ends:[[ax,az],[bx,bz]],w});
 }
 function clipRoad(polygon,triangle){
  let out=polygon;
@@ -696,25 +804,29 @@ const CAMERA_FOV=68,CAMERA_NEAR=.18,WALL_MARGIN=nearPlaneMargin(CAMERA_NEAR,CAME
 const addCircle=(x,z,r,kind='solid')=>obstacles.push(circleCollider(x,z,r,kind));
 const addBox=(x,z,hx,hz,kind='solid')=>obstacles.push(boxCollider(x,z,hx,hz,kind));
 function rock(x,z,s){let y=height(x,z);sphere(x,y+s*.23,z,s,s*.55,s*.72,pal.stone,7,4);if(s>.7&&y>.3)addCircle(x,z,s*.6);}
-for(let i=0;i<85;i++){let a=rnd(0,Math.PI*2),r=rnd(.82,1.07),x=Math.cos(a)*35*r,z=Math.sin(a)*39*r;if(height(x,z)>-.4&&distanceToRoute(x,z)>2.8)rock(x,z,rnd(.3,1.2));}
+rock=gridProp(rock,s=>s>.7);
+for(let i=0;i<85;i++){let a=rnd(0,Math.PI*2),r=rnd(.82,1.07),x=Math.cos(a)*35*r,z=Math.sin(a)*39*r;if(height(x,z)>-.4&&routeDistance(x,z)>2.8)rock(x,z,rnd(.3,1.2));}
 // A few worn stepping stones lead inland.
 for(let i=0;i<22;i++){const t=i/21,j=Math.floor(t*(path.length-1)),u=t*(path.length-1)-j;const a=path[Math.min(j,path.length-2)],b=path[Math.min(j+1,path.length-1)],x=a[0]*(1-u)+b[0]*u+rnd(-.5,.5),z=a[1]*(1-u)+b[1]*u; sphere(x,height(x,z)+.025,z,.36,.065,.25,hex('bdbfb0'),7,3);steppingStones.push([x,z]);}
 function olive(x,z,s=1){const y=height(x,z);branch([x,y,z],[x+.12*s,y+2.15*s,z],.12*s,pal.bark);for(let i=0;i<4;i++){const a=i*2.4,dx=Math.cos(a)*.7*s,dz=Math.sin(a)*.65*s;branch([x,y+1.1*s,z],[x+dx,y+2.5*s,z+dz],.06*s,pal.bark);sphere(x+dx,y+2.6*s,z+dz,.85*s,.5*s,.72*s,i%2?pal.olive:hex('a8b7a1'),9,5);}addCircle(x,z,.1*s,'tree');}
-for(let i=0;i<64;i++){const x=rnd(-29,29),z=rnd(-30,27);if(height(x,z)<1.2||distanceToRoute(x,z)<3||Math.hypot(x+4,z+12)<6||Math.hypot(x-23,z-8)<4)continue;olive(x,z,rnd(.8,1.25));}
+olive=gridProp(olive);
+for(let i=0;i<64;i++){const x=rnd(-29,29),z=rnd(-30,27);if(height(x,z)<1.2||routeDistance(x,z)<3||Math.hypot(x+4,z+12)<6||Math.hypot(x-23,z-8)<4)continue;olive(x,z,rnd(.8,1.25));}
 // Surreal plants: striped umbrella fungi and curled sea ferns.
 function mushroom(x,z,s,hue=0){const y=height(x,z),c=[pal.purple,pal.pink,pal.blue][hue];cone(x,y,z,.1*s,.15*s,1.65*s,pal.cream,8);sphere(x,y+1.65*s,z,.9*s,.37*s,.9*s,c,18,6);for(let j=0;j<3;j++)torus(x,y+(1.68+j*.09)*s,z,(.78-j*.19)*s,.025*s,j%2?pal.cream:pal.pink);for(let i=0;i<5;i++){const a=i*1.26;sphere(x+Math.cos(a)*.44*s,y+1.94*s,z+Math.sin(a)*.44*s,.07*s,.025*s,.07*s,pal.cream,5,3);}addCircle(x,z,.12*s,'plant');}
+mushroom=gridProp(mushroom);
 function fern(x,z,s){const y=height(x,z);for(let i=0;i<4;i++){const a=i*1.5,dx=Math.cos(a),dz=Math.sin(a);let p=[x,y,z];for(let j=1;j<=8;j++){const t=j/8,b=[x+dx*Math.sin(t*2.6)*.8*s,y+t*2.1*s,z+dz*Math.sin(t*2.6)*.8*s];branch(p,b,.035*s,j%2?pal.purple:pal.pink);if(j>2&&j<7)sphere(b[0]+dz*.18*s,b[1],b[2]-dx*.18*s,.21*s,.07*s,.11*s,j%2?pal.blue:pal.pink,6,3);p=b;}sphere(p[0],p[1],p[2],.13*s,.14*s,.13*s,pal.cream,7,4);}}
 for(const [x,z,s,c] of [[-4,24,1.25,0],[-6,23,.65,1],[-3,22,.7,2],[15,21,1.45,1],[17,19,.75,0],[19,22,.5,2],[-14,6,1.6,0],[-16,7,.9,2],[-13,8,.6,1],[9,-4,1.1,0],[10,-7,.65,1],[-24,-10,1.4,2],[-46,22,1.2,1]])mushroom(x,z,s,c);
-for(let i=0;i<34;i++){const x=rnd(-28,28),z=rnd(-29,30);if(height(x,z)>1&&distanceToRoute(x,z)>2.4)fern(x,z,rnd(.45,.9));}
+for(let i=0;i<34;i++){const x=rnd(-28,28),z=rnd(-29,30);if(height(x,z)>1&&routeDistance(x,z)>2.4)fern(x,z,rnd(.45,.9));}
 // Tiny pastel grass, flowers, and salt-worn pebbles.
-for(let i=0;i<600;i++){const x=rnd(-34,34),z=rnd(-38,38),y=height(x,z);if(y<1||distanceToRoute(x,z)<2)continue;const s=rnd(.12,.35),c=i%5===0?pal.pink:hex('a0b393');tri([x-.09,y,z],[x,y+s,z],[x+.09,y,z],c);tri([x,y,z-.09],[x,y+s,z],[x,y,z+.09],c);if(i%11===0)sphere(x,y+s,z,.07,.06,.07,pal.cream,5,3);}
+for(let i=0;i<600;i++){const x=rnd(-34,34),z=rnd(-38,38),y=height(x,z);if(y<1||routeDistance(x,z)<2)continue;const s=rnd(.12,.35),c=i%5===0?pal.pink:hex('a0b393');tri([x-.09,y,z],[x,y+s,z],[x+.09,y,z],c);tri([x,y,z-.09],[x,y+s,z],[x,y,z+.09],c);if(i%11===0)sphere(x,y+s,z,.07,.06,.07,pal.cream,5,3);}
 // Torii, with a subdued vermilion pigment washed by sea air.
-const tx=23,tz=8,ty=height(tx,tz);for(const x of [tx-1.55,tx+1.55]){cone(x,ty,tz,.17,.14,3.8,pal.red,9);box(x,ty-.02,tz,.6,.18,.6,pal.stone);}box(tx,ty+2.9,tz,3.8,.2,.22,pal.red);box(tx,ty+3.65,tz,4.6,.25,.43,pal.red);box(tx,ty+3.91,tz,4.9,.1,.54,hex('76877e'));box(tx,ty+3.1,tz,.3,.5,.14,pal.cream);addCircle(tx-1.55,tz,.14,'gate');addCircle(tx+1.55,tz,.14,'gate');
+const ty=height(tx,tz);for(const x of [tx-1.55,tx+1.55]){cone(x,ty,tz,.17,.14,3.8,pal.red,9);box(x,ty-.02,tz,.6,.18,.6,pal.stone);}box(tx,ty+2.9,tz,3.8,.2,.22,pal.red);box(tx,ty+3.65,tz,4.6,.25,.43,pal.red);box(tx,ty+3.91,tz,4.9,.1,.54,hex('76877e'));box(tx,ty+3.1,tz,.3,.5,.14,pal.cream);addCircle(tx-1.55,tz,.14,'gate');addCircle(tx+1.55,tz,.14,'gate');
 // An empty, open-sided hill shrine. The floor remains walkable.
-const sx=-4,sz=-13,sy=height(sx,sz);box(sx,sy-.2,sz,5.5,.25,4.5,pal.stone);box(sx,sy+.05,sz,4.6,.18,3.7,hex('b5aa94'));for(const x of [sx-2,sx+2])for(const z of [sz-1.5,sz+1.5]){box(x,sy+.2,z,.16,2.7,.16,pal.bark);addCircle(x,z,.06,'pillar');}box(sx,sy+2.8,sz,4.5,.18,3.8,pal.bark);
+const sy=height(sx,sz);box(sx,sy-.2,sz,5.5,.25,4.5,pal.stone);box(sx,sy+.05,sz,4.6,.18,3.7,hex('b5aa94'));for(const x of [sx-2,sx+2])for(const z of [sz-1.5,sz+1.5]){box(x,sy+.2,z,.16,2.7,.16,pal.bark);addCircle(x,z,.06,'pillar');}box(sx,sy+2.8,sz,4.5,.18,3.8,pal.bark);
 for(const sign of [-1,1]){const a=[sx-2.9,sy+2.9,sz+sign*2.3],b=[sx+2.9,sy+2.9,sz+sign*2.3],c=[sx+2.9,sy+4,sz],d=[sx-2.9,sy+4,sz];quad(a,b,c,d,hex('889c98'));}box(sx,sy+4,sz,6,.13,.18,hex('7c8f8a'));cone(sx,sy+.2,sz,.48,.4,.6,pal.stone,8);
 // Shore lanterns and a weathered landing jetty.
 function lantern(x,z){const y=height(x,z);cone(x,y,z,.3,.18,.2,pal.stone);box(x,y+.2,z,.19,.7,.19,pal.stone);box(x,y+.9,z,.48,.45,.48,pal.cream);cone(x,y+1.35,z,.45,0,.3,pal.stone,4);addCircle(x,z,.14,'lantern');}
+lantern=gridProp(lantern,undefined,true);
 for(const p of [[-6,-8],[-1,-8],[19,12],[26,12],[-29,22]])lantern(...p);
 for(let i=0;i<18;i++)box(7.5,.35,33+i*.5,2.1,.12,.43,hex(i%2?'a6a895':'b1b09c'));for(const z of [34,37,40])for(const x of [6.4,8.6]){cone(x,-1,z,.1,.08,2,pal.bark);}
 // An old mooring ring and a few ribbons at the far end of the sandbar.
@@ -722,33 +834,37 @@ cone(-48,height(-48,22),22,.1,.08,2.8,pal.bark);for(let i=0;i<3;i++){const x=-48
 const world=batch();
 // Northern scenery is split into small batches, so a phone need not draw plants behind it.
 const scenery=[];
-function sceneryBatch(x,z,r){scenery.push({...batch(),x,z,r});}
+function sceneryBatch(x,z,r){scenery.push({...batch(),x,z,r:r+(GRID_MODE?CELL:0)});}
 function umbrella(x,z,s,tint){const y=height(x,z);branch([x,y,z],[x+.2*s,y+3.2*s,z],.14*s,pal.bark);cone(x+.2*s,y+3.05*s,z,1.55*s,.15*s,.65*s,tint,12);sphere(x+.2*s,y+3.7*s,z,.4*s,.16*s,.4*s,pal.cream,8,3);for(let i=0;i<3;i++){const a=i*2.094;branch([x,y+1.8*s,z],[x+Math.cos(a)*1.15*s,y+3.1*s,z+Math.sin(a)*1.15*s],.055*s,pal.pink);}addCircle(x,z,.12*s,'tree');}
+umbrella=gridProp(umbrella);
 function signpost(x,z){const y=height(x,z);box(x,y,z,.12,1.25,.12,pal.bark);box(x+.28,y+1,z,.85,.2,.1,pal.cream);addCircle(x,z,.045,'signpost');}
+signpost=gridProp(signpost,undefined,true);
 // Tall lavender umbrellas enclose the west path; the path itself stays generous and clear.
-for(let i=0;i<42;i++){const x=rnd(-51,-16),z=rnd(-79,-37);if(height(x,z)>1.3&&distanceToRoute(x,z)>3.3)umbrella(x,z,rnd(.85,1.6),i%3?pal.purple:pal.pink);}
-for(const [x,z] of [[-32,-52],[-41,-61],[-28,-67],[-18,-47]])if(distanceToRoute(x,z)>2.5)mushroom(x,z,.9,2);
+for(let i=0;i<42;i++){const x=rnd(-51,-16),z=rnd(-79,-37);if(height(x,z)>1.3&&routeDistance(x,z)>3.3)umbrella(x,z,rnd(.85,1.6),i%3?pal.purple:pal.pink);}
+for(const [x,z] of [[-32,-52],[-41,-61],[-28,-67],[-18,-47]])if(routeDistance(x,z)>2.5)mushroom(x,z,.9,2);
 for(const p of [[-13,-31],[-24,-48],[-38,-65]])lantern(...p);
 signpost(-12.6,-34);sceneryBatch(-31,-56,32);
 // Olive rows with low, broken retaining walls follow the hillside rather than blocking the route.
-for(const z of [-61,-68,-75])for(let x=20;x<=48;x+=6){if(height(x,z)>1&&distanceToRoute(x,z)>3.2)olive(x,z,.95);}
-for(const z of [-62.8,-69.8,-76.8])for(let x=17;x<49;x+=1.2){if(height(x,z)>.9&&distanceToRoute(x,z)>2.7)box(x,height(x,z)-.12,z,1.1,.38,.48,hex('b1b8a6'));}
+for(const z of [-61,-68,-75])for(let x=20;x<=48;x+=6){if(height(x,z)>1&&routeDistance(x,z)>3.2)olive(x,z,.95);}
+for(const z of [-62.8,-69.8,-76.8])for(let x=17;x<49;x+=1.2){if(height(x,z)>.9&&routeDistance(x,z)>2.7)box(x,height(x,z)-.12,z,1.1,.38,.48,hex('b1b8a6'));}
 // A small field shelter and empty bench look across the eastern sea.
 const hx=44,hz=-72,hy=height(hx,hz);for(const x of [hx-1.5,hx+1.5])box(x,hy,hz,.13,2,.13,pal.bark);box(hx,hy+2,hz,3.8,.14,2.5,hex('adb5a0'));box(hx,hy+.45,hz,2.6,.14,.6,pal.bark);addBox(hx,hz,1.15,.23,'bench');for(const x of [hx-1.5,hx+1.5])addCircle(x,hz,.05,'pillar');
 lantern(32,-62);signpost(17,-58);sceneryBatch(33,-69,29);
 // Glass cove: a curved sand beach, shell spirals, reeds and pale shoreline stones.
-for(let i=0;i<18;i++){const a=2.1+i/17*1.7,x=47+Math.cos(a)*25.8,z=-44+Math.sin(a)*14.8;if(height(x,z)>0&&distanceToRoute(x,z)>2.6)rock(x,z,rnd(.35,.75));}
-for(let i=0;i<24;i++){const x=rnd(24,42),z=rnd(-60,-53),y=height(x,z);if(y<.25||y>1.6||distanceToRoute(x,z)<2)continue;for(let j=0;j<3;j++)branch([x+j*.13,y,z],[x+j*.13+.13,y+rnd(.7,1.4),z],.025,j%2?pal.blue:pal.cream);}
+for(let i=0;i<18;i++){const a=2.1+i/17*1.7,x=47+Math.cos(a)*25.8,z=-44+Math.sin(a)*14.8;if(height(x,z)>0&&routeDistance(x,z)>2.6)rock(x,z,rnd(.35,.75));}
+for(let i=0;i<24;i++){const x=rnd(24,42),z=rnd(-60,-53),y=height(x,z);if(y<.25||y>1.6||routeDistance(x,z)<2)continue;for(let j=0;j<3;j++)branch([x+j*.13,y,z],[x+j*.13+.13,y+rnd(.7,1.4),z],.025,j%2?pal.blue:pal.cream);}
 const cx=33,cz=-55,cy=height(cx,cz);for(let i=0;i<26;i++){const a=i*.49,r=.08+i*.035;sphere(cx+Math.cos(a)*r,cy+.035,cz+Math.sin(a)*r,.09,.045,.07,pal.cream,5,3);}
 sceneryBatch(34,-52,22);
 // An open flower ridge leads to a high, quiet headland. No foliage obscures the sea here.
-for(let i=0;i<1000;i++){const x=rnd(-53,53),z=rnd(-112,-31),y=height(x,z);if(y<1||distanceToRoute(x,z)<2||z<-96)continue;const s=rnd(.18,.45),c=x<-15?pal.pink:pal.cream;tri([x-.11,y,z],[x,y+s,z],[x+.11,y,z],c);tri([x,y,z-.11],[x,y+s,z],[x,y,z+.11],c);if(i%7===0)sphere(x,y+s,z,.1,.07,.1,pal.purple,5,3);}
+for(let i=0;i<1000;i++){const x=rnd(-53,53),z=rnd(-112,-31),y=height(x,z);if(y<1||routeDistance(x,z)<2||z<-96)continue;const s=rnd(.18,.45),c=x<-15?pal.pink:pal.cream;tri([x-.11,y,z],[x,y+s,z],[x+.11,y,z],c);tri([x,y,z-.11],[x,y+s,z],[x,y,z+.11],c);if(i%7===0)sphere(x,y+s,z,.1,.07,.1,pal.purple,5,3);}
 for(const [x,z] of [[-18,-77],[-11,-84],[9,-90]])umbrella(x,z,.8,pal.blue);
-for(let i=0;i<12;i++){const a=i/12*Math.PI*2,x=6+Math.cos(a)*7,z=-104+Math.sin(a)*5;if(distanceToRoute(x,z)>3)rock(x,z,rnd(.5,1.1));}
+for(let i=0;i<12;i++){const a=i/12*Math.PI*2,x=6+Math.cos(a)*7,z=-104+Math.sin(a)*5;if(routeDistance(x,z)>3)rock(x,z,rnd(.5,1.1));}
 // Three cloth streamers, a low bench, and a sea-facing stone circle make the cape legible from afar.
-for(const x of [3.2,4.6,6]){const y=height(x,-105);branch([x,y,-105],[x,y+4,-105],.065,pal.bark);quad([x,y+3.9,-105],[x+.85,y+3.72,-105],[x+.82,y+2.4,-105],[x+.12,y+2.55,-105],x<5?pal.pink:pal.cream);addCircle(x,-105,.05,'flagpole');}
-box(9,height(9,-103)+.4,-103,2.5,.15,.65,pal.bark);for(const x of [8.1,9.9])box(x,height(x,-103),-103,.15,.45,.5,pal.stone);
-addBox(9,-103,1.1,.24,'bench');
+// Grid mode gives the streamers and the bench their own cells beside the cape road.
+{const [fx,fz]=GRID_MODE?claimCell(4.6,-105,true):[4.6,-105],[bx,bz]=GRID_MODE?claimCell(9,-103,true):[9,-103];
+for(const x of [fx-1.4,fx,fx+1.4]){const y=height(x,fz);branch([x,y,fz],[x,y+4,fz],.065,pal.bark);quad([x,y+3.9,fz],[x+.85,y+3.72,fz],[x+.82,y+2.4,fz],[x+.12,y+2.55,fz],x<fx+.5?pal.pink:pal.cream);addCircle(x,fz,.05,'flagpole');}
+box(bx,height(bx,bz)+.4,bz,2.5,.15,.65,pal.bark);for(const x of [bx-.9,bx+.9])box(x,height(x,bz),bz,.15,.45,.5,pal.stone);
+addBox(bx,bz,1.1,.24,'bench');}
 lantern(3,-96);signpost(-2,-86);sceneryBatch(0,-88,78);
 // Broad landscapes beyond the first cape. Each district has its own culled buffer.
 function quietTree(x,z,s=1,tint=pal.olive){
@@ -767,6 +883,7 @@ function quietTree(x,z,s=1,tint=pal.olive){
  }
  addCircle(x,z,.12*s,'tree');
 }
+quietTree=gridProp(quietTree);
 function shoreHouse(x,z,w=6){
  const y=height(x,z),h=w*.65;box(x,y,z,w,h,w*.8,hex('d0c9b4'));
  const ridge=y+h+w*.27;quad([x-w*.6,y+h,z-w*.5],[x+w*.6,y+h,z-w*.5],[x+w*.6,ridge,z],[x-w*.6,ridge,z],hex('879995'));
@@ -776,25 +893,26 @@ function shoreHouse(x,z,w=6){
  // Walls span z -0.4w..0.4w; the door and window frames stand up to 0.41w+0.04 on the front face.
  addBox(x,z+w*.005+.02,w*.5+WALL_MARGIN,w*.405+.02+WALL_MARGIN,'house');
 }
+shoreHouse=gridProp(shoreHouse,undefined,true);
 // Widely spaced signposts each take their own one-metre culling circle; a shared distant centre hid posts in plain view.
-for(const [x,z] of [[-20,-145],[-2,-192],[-109,-224],[-245,-273],[-270,-416],[-223,-489],[-127,-559],[-111,-675],[-69,-777],[9,-815],[217,-632],[302,-510],[279,-391],[166,-291],[64,-222]])if(distanceToRoute(x,z)>3.5){signpost(x,z);sceneryBatch(x,z,1);}
+for(const [x,z] of [[-20,-145],[-2,-192],[-109,-224],[-245,-273],[-270,-416],[-223,-489],[-127,-559],[-111,-675],[-69,-777],[9,-815],[217,-632],[302,-510],[279,-391],[166,-291],[64,-222]])if(routeDistance(x,z)>3.5){signpost(x,z);sceneryBatch(x,z,1);}
 // Grove clusters leave long stretches open so the sea and monuments remain useful bearings.
 for(const [gx,gz,tint] of [[-90,-200,pal.olive],[-170,-265,pal.olive],[-310,-390,pal.purple],[-185,-470,pal.olive],[-140,-620,pal.olive],[-120,-750,pal.blue],[85,-690,pal.olive],[240,-600,pal.olive],[280,-450,pal.olive],[145,-270,pal.purple]]){
- for(let i=0;i<36;i++){const x=gx+rnd(-42,42),z=gz+rnd(-36,36);if(height(x,z)>2.8&&distanceToRoute(x,z)>9)quietTree(x,z,rnd(1.1,2.4),i%5?tint:pal.pink);}
- for(let i=0;i<8;i++){const x=gx+rnd(-40,40),z=gz+rnd(-35,35),y=height(x,z);if(y<2||distanceToRoute(x,z)<7)continue;const h=rnd(.6,1.3);cone(x,y,z,.15,.1,h,pal.cream,5);sphere(x,y+h,z,.55,.2,.55,pal.pink,7,3);}
+ for(let i=0;i<36;i++){const x=gx+rnd(-42,42),z=gz+rnd(-36,36);if(height(x,z)>2.8&&routeDistance(x,z)>9)quietTree(x,z,rnd(1.1,2.4),i%5?tint:pal.pink);}
+ for(let i=0;i<8;i++){const x=gx+rnd(-40,40),z=gz+rnd(-35,35),y=height(x,z);if(y<2||routeDistance(x,z)<7)continue;const h=rnd(.6,1.3);cone(x,y,z,.15,.1,h,pal.cream,5);sphere(x,y+h,z,.55,.2,.55,pal.pink,7,3);}
  sceneryBatch(gx,gz,70);
 }
 // A hillside harbour town with a long sea-facing lane and pale tiled roofs.
-for(const [x,z,w] of [[-323,-312,7],[-329,-326,6],[-327,-343,7],[-296,-322,6],[-293,-338,7],[-298,-354,6],[-337,-350,5],[-334,-366,6]])if(distanceToRoute(x,z)>7)shoreHouse(x,z,w);
+for(const [x,z,w] of [[-323,-312,7],[-329,-326,6],[-327,-343,7],[-296,-322,6],[-293,-338,7],[-298,-354,6],[-337,-350,5],[-334,-366,6]])if(routeDistance(x,z)>7)shoreHouse(x,z,w);
 for(let i=0;i<26;i++){const x=-349+i*.8,z=-351,y=height(x,z);box(x,y-.05,z,.75,.16,2.2,pal.stone);}
 lantern(-317,-327);lantern(-300,-345);sceneryBatch(-319,-341,64);
 // Dark, layered rock walls follow a dry, gently graded floor through the gorge.
-for(let i=0;i<18;i++){const z=-296-i*14,centre=.15*(z+400);for(const sign of [-1,1]){const x=centre+sign*rnd(35,48);if(distanceToRoute(x,z)<9)continue;const y=height(x,z),h=rnd(8,18),r=rnd(3,6);for(let j=0;j<3;j++)cone(x,y+j*h/3,z,r*(1-j*.14),r*(.9-j*.14),h/3,hex(j%2?'9da8a0':'b3b6a7'),7);addCircle(x,z,r+WALL_MARGIN,'gorge-rock');}}
+for(let i=0;i<18;i++){const z=-296-i*14,centre=.15*(z+400);for(const sign of [-1,1]){const x=centre+sign*rnd(35,48);if(routeDistance(x,z)<9)continue;const y=height(x,z),h=rnd(8,18),r=rnd(3,6);for(let j=0;j<3;j++)cone(x,y+j*h/3,z,r*(1-j*.14),r*(.9-j*.14),h/3,hex(j%2?'9da8a0':'b3b6a7'),7);addCircle(x,z,r+WALL_MARGIN,'gorge-rock');}}
 for(const p of [[23,-326],[-7,-410],[-25,-508]])lantern(...p);
 sceneryBatch(0,-425,180);
 // Terraced rice paddies and olive rows, with generous gaps where the walking path crosses.
-for(let row=0;row<7;row++){const z=-462-row*14;for(let x=-278;x<-168;x+=4){if(distanceToRoute(x,z)<8||height(x,z)<3)continue;const y=height(x,z);box(x,y-.15,z,3.8,.5,1.1,hex('aab5a1'));for(let j=0;j<3;j++){const zz=z-3-j*2,yy=height(x,zz);tri([x-.13,yy,zz],[x,yy+.65,zz],[x+.13,yy,zz],hex('b4bf9d'));}}}
-for(const x of [-273,-175])for(const z of [-477,-519,-547])if(height(x,z)>3&&distanceToRoute(x,z)>8)quietTree(x,z,1.8);
+for(let row=0;row<7;row++){const z=-462-row*14;for(let x=-278;x<-168;x+=4){if(routeDistance(x,z)<8||height(x,z)<3)continue;const y=height(x,z);box(x,y-.15,z,3.8,.5,1.1,hex('aab5a1'));for(let j=0;j<3;j++){const zz=z-3-j*2,yy=height(x,zz);tri([x-.13,yy,zz],[x,yy+.65,zz],[x+.13,yy,zz],hex('b4bf9d'));}}}
+for(const x of [-273,-175])for(const z of [-477,-519,-547])if(height(x,z)>3&&routeDistance(x,z)>8)quietTree(x,z,1.8);
 shoreHouse(-252,-551,7);sceneryBatch(-224,-511,95);
 // White quarry walls, stepped away from the traversable lane.
 for(let i=0;i<5;i++){const x=352+i*6,z=-515-i*12,y=height(x,z);box(x,y-.3,z,13,7+i*1.6,16,hex(i%2?'c5c7b8':'d6d0bc'));addBox(x,z,6.5+WALL_MARGIN,8+WALL_MARGIN,'quarry');}
@@ -830,11 +948,11 @@ for(const m of monuments){const {x,z,size:r,kind}=m,y=height(x,z);
 // The eastern islands: low salt basins, a reed garden, windmills and a sea-facing ruin.
 // All additions use local culled batches; the original landing and skyline stay intact.
 for(const [x,z] of [[382,-462],[501,-496],[646,-443],[815,-419],[1009,-559],[1097,-671],[975,-805],[751,-773],[594,-633],[478,-598]]){
- if(height(x,z)>1&&distanceToRoute(x,z)>7){signpost(x,z);sceneryBatch(x,z,1);}
+ if(height(x,z)>1&&routeDistance(x,z)>7){signpost(x,z);sceneryBatch(x,z,1);}
 }
 for(let i=0;i<22;i++){
  const x=376+i*6,z=-482-i*1.05;
- if(height(x,z)>0&&distanceToRoute(x,z)>9)rock(x,z,rnd(1.2,2.8));
+ if(height(x,z)>0&&routeDistance(x,z)>9)rock(x,z,rnd(1.2,2.8));
 }
 sceneryBatch(448,-499,120);
 // Mirror-like ceramic salt trays follow the ground instead of floating through the hillside.
@@ -842,21 +960,21 @@ for(const [cx,cz] of [[557,-477],[589,-470],[562,-546],[604,-551],[626,-527]]){
  const w=18,d=13;
  for(let iz=0;iz<d;iz+=2)for(let ix=0;ix<w;ix+=2){
   const x=cx+ix-w/2,z=cz+iz-d/2;
-  if(distanceToRoute(x+1,z+1)<7)continue;
+  if(routeDistance(x+1,z+1)<7)continue;
   quad([x,height(x,z)+.055,z],[x,height(x,z+2)+.055,z+2],[x+2,height(x+2,z+2)+.055,z+2],[x+2,height(x+2,z)+.055,z],hex((ix+iz)%6?'b8cecc':'d6deda'));
  }
- for(let i=0;i<12;i++){const x=cx+rnd(-w/2,w/2),z=cz+rnd(-d/2,d/2);if(distanceToRoute(x,z)>8)cone(x,height(x,z)+.06,z,.45,.12,.32,pal.cream,5);}
+ for(let i=0;i<12;i++){const x=cx+rnd(-w/2,w/2),z=cz+rnd(-d/2,d/2);if(routeDistance(x,z)>8)cone(x,height(x,z)+.06,z,.45,.12,.32,pal.cream,5);}
 }
 shoreHouse(544,-530,7);lantern(579,-488);sceneryBatch(590,-516,90);
 // A sunken water garden: reeds trace actual water pockets and leave the lane open.
 for(let i=0;i<380;i++){
  const x=rnd(676,793),z=rnd(-459,-339),y=height(x,z);
- if(y<.2||distanceToRoute(x,z)<8)continue;
+ if(y<.2||routeDistance(x,z)<8)continue;
  const h=rnd(1.2,3),tint=i%3?pal.olive:pal.blue;
  for(const s of [-1,1])tri([x+s*.16,y,z],[x+s*.35,y+h,z+.3],[x,y+h*.45,z],tint);
  if(i%3===0)sphere(x,y+h,z,.09,.34,.09,pal.cream,5,3);
 }
-for(const [x,z] of [[691,-401],[762,-431],[782,-388]])if(height(x,z)>1&&distanceToRoute(x,z)>9)umbrella(x,z,2,pal.blue);
+for(const [x,z] of [[691,-401],[762,-431],[782,-388]])if(height(x,z)>1&&routeDistance(x,z)>9)umbrella(x,z,2,pal.blue);
 lantern(724,-395);sceneryBatch(735,-403,100);
 const movingSails=[];
 function windmill(x,z,h){
@@ -872,9 +990,10 @@ function windmill(x,z,h){
  movingSails.push({...batch(),x,z,r:h+18,offset:new Float32Array([x,hub,z+2]),phase:movingSails.length*.7});
  addCircle(x,z,2.8);
 }
+windmill=gridProp(windmill,undefined,true);
 for(const [x,z,h] of [[878,-507,16],[927,-491,19],[945,-544,15]])windmill(x,z,h);
 for(let i=0;i<440;i++){
- const x=rnd(846,976),z=rnd(-573,-463),y=height(x,z);if(y<1||distanceToRoute(x,z)<8)continue;
+ const x=rnd(846,976),z=rnd(-573,-463),y=height(x,z);if(y<1||routeDistance(x,z)<8)continue;
  const col=i%3?pal.purple:pal.cream;tri([x-.3,y,z],[x,y+rnd(.6,1.2),z],[x+.3,y,z],col);
 }
 sceneryBatch(911,-520,110);
@@ -884,7 +1003,7 @@ cone(lx,ly,lz,4,2.5,30,hex('e1d9c5'),14);cone(lx,ly+30,lz,3.3,3.3,1,pal.stone,14
 cone(lx,ly+31,lz,2.5,2.5,3,pal.blue,12);cone(lx,ly+34,lz,3.5,.1,3,pal.cream,14);
 for(let i=0;i<8;i++){const a=i*Math.PI/4;branch([lx+Math.cos(a)*2.6,ly+31,lz+Math.sin(a)*2.6],[lx+Math.cos(a)*2.6,ly+34,lz+Math.sin(a)*2.6],.07,pal.stone);}
 box(lx,ly,lz+3.9,1.8,3,.12,pal.bark);addCircle(lx,lz,4);
-for(const [x,z] of [[1090,-624],[1125,-674],[1151,-637]])if(height(x,z)>1&&distanceToRoute(x,z)>9)rock(x,z,2.5);
+for(const [x,z] of [[1090,-624],[1125,-674],[1151,-637]])if(height(x,z)>1&&routeDistance(x,z)>9)rock(x,z,2.5);
 sceneryBatch(1123,-646,90);
 // Roofless reading room: the path passes between columns and rows of pale stone books.
 for(const dx of [-16,16])for(const dz of [-23,-8,8,23]){
@@ -900,11 +1019,11 @@ lantern(1062,-738);sceneryBatch(1075,-755,80);
 // Open shell circle and small pink groves on the returning shore.
 for(let i=0;i<28;i++){
  const a=i*Math.PI*2/28,x=865+Math.cos(a)*24,z=-850+Math.sin(a)*24;
- if(height(x,z)>.3&&distanceToRoute(x,z)>8){cone(x,height(x,z),z,1.1,.2,2.7,i%2?pal.cream:pal.pink,5);addCircle(x,z,.8);}
+ if(height(x,z)>.3&&routeDistance(x,z)>8){cone(x,height(x,z),z,1.1,.2,2.7,i%2?pal.cream:pal.pink,5);addCircle(x,z,.8);}
 }
 sceneryBatch(865,-850,65);
 for(const [gx,gz] of [[820,-804],[936,-791],[698,-719],[548,-595]]){
- for(let i=0;i<20;i++){const x=gx+rnd(-22,22),z=gz+rnd(-20,20);if(height(x,z)>1&&distanceToRoute(x,z)>9)quietTree(x,z,rnd(1.5,2.4),i%4?pal.pink:pal.blue);}
+ for(let i=0;i<20;i++){const x=gx+rnd(-22,22),z=gz+rnd(-20,20);if(height(x,z)>1&&routeDistance(x,z)>9)quietTree(x,z,rnd(1.5,2.4),i%4?pal.pink:pal.blue);}
  sceneryBatch(gx,gz,55);
 }
 
@@ -928,6 +1047,7 @@ function islander(x,z,name,lines,tint){
  box(-.2,.02,.1,.19,.1,.37,ink);box(.2,.02,.1,.19,.1,.37,ink);
  npcs.push({x,z,y:height(x,z),name,lines,mesh:batch(),last:-100,index:0,angle:0,r:2,offset:new Float32Array([x,height(x,z),z])});addCircle(x,z,.46,'islander');
 }
+islander=gridProp(islander,undefined,true);
 islander(6.3,18.2,'浜のひと',['……ようこそ。潮が、あなたを連れてきた。','この島では、どこへ急ぐこともありません。'], 'a3b4b2');
 islander(20.5,5.3,'面を干すひと',['こんにちは。今日は、いい凪ですね。','あの花は、昨日まで青かったのですよ。'], 'b4a7bd');
 islander(-6,-15.5,'丘のひと',['おかえりなさい。……はじめまして、でしたか。','海の向こうにも、きっと、誰かの島がある。'], 'b6bba0');
@@ -957,7 +1077,8 @@ function emptyChair(x,z){
  }
  addBox(x,z,.42,.39,'chair');
 }
-for(const scene of journeyScenes){
+const scenes=journeyScenes.map(scene=>{if(!GRID_MODE)return scene;const c=claimCell(scene.x,scene.z,true)||[scene.x,scene.z];return {...scene,x:c[0],z:c[1]};});
+for(const scene of scenes){
  const {x,z,kind}=scene,y=height(x,z);
  if(kind==='boat'){
   // Open ribs, a broken seat and an oar pointing to the water.
@@ -1019,13 +1140,13 @@ for(const points of [expeditionRoute,valleyRoute,easternRoute,saltRoute])for(let
   const cx=ax+(bx-ax)*t-(bz-az)/length*side*13,cz=az+(bz-az)*t+(bx-ax)/length*side*13;
   for(let k=0;k<16;k++){
    const x=cx+rnd(-6,6),z=cz+rnd(-6,6),y=height(x,z);
-   if(y<.4||distanceToRoute(x,z)<8)continue;
+   if(y<.4||routeDistance(x,z)<8)continue;
    const c=x>820?pal.purple:z<-300&&x<0?hex('b6b48a'):pal.olive,h=rnd(.35,.85);
    tri([x-.16,y,z],[x+.15,y+h,z+.16],[x+.16,y,z],c);
    tri([x,y,z-.16],[x+.15,y+h,z+.16],[x,y,z+.16],c);
    if(k%5===0)sphere(x+.15,y+h,z+.16,.11,.065,.11,pal.cream,5,3);
   }
-  if(vergeIndex%3===0&&height(cx,cz)>.5&&distanceToRoute(cx,cz)>10){
+  if(vergeIndex%3===0&&height(cx,cz)>.5&&routeDistance(cx,cz)>10){
    for(let k=0;k<3;k++)sphere(cx,height(cx,cz)+.15+k*.22,cz,.48-k*.12,.18,.35-k*.08,pal.stone,6,3);
   }
   sceneryBatch(cx,cz,24);
@@ -1045,7 +1166,7 @@ const RUN_SPEED=CRUISE_SPEED,GREETING_RADIUS=4.8;
 const collisionWorld=new CollisionWorld(obstacles,{height,walkable});
 const player=createMotionState(8,30,.25);player.y=height(8,30)+1.65;
 // Grid cells are 3 m, centred on the landing; the walker faces north up the island.
-const walker=GRID_MODE?new GridWalker(collisionWorld,{origin:[8,30],cell:CELL,heading:0}):null;
+const walker=GRID_MODE?new GridWalker(collisionWorld,{origin:GRID_ORIGIN,cell:CELL,heading:0}):null;
 if(walker){player.yaw=walker.yaw;player.y=walker.y;}
 const camera={x:player.x,y:player.y,z:player.z,yaw:player.yaw};
 let previous={...camera},accumulator=0;
@@ -1107,11 +1228,15 @@ function heldCommand(){
  for(let i=keyOrder.length-1;i>=0;i--){const c=keyCommand(keyOrder[i]);if(c)return c;}
  return null;
 }
+let activeCommand=null;
 function gridUpdate(dt){
+ const held=heldCommand();
+ // Letting go (or changing direction) mid-step slows to a stop on the cell being entered.
+ if(held!==activeCommand)walker.easeOut();
  walker.update(dt);
  if(!walker.busy){
-  const command=pendingCommand||heldCommand();pendingCommand=null;
-  if(command&&walker.command(command,{quick:keys.has('ShiftLeft')||keys.has('ShiftRight')})==='step'){
+  const command=pendingCommand||held;pendingCommand=null;activeCommand=command;
+  if(command&&walker.command(command,{quick:keys.has('ShiftLeft')||keys.has('ShiftRight'),hold:command===held})==='step'){
    const [x,z]=walker.center(walker.i,walker.j);footstep(surfaceAt(x,z),CELL/STEP_SECONDS);
   }
  }
@@ -1140,7 +1265,7 @@ function update(dt){
   shownPlaces.add(name);
   if(!announcedPlaces.has(name)&&showNotice('place',name,name,en,3.8))announcedPlaces.add(name);
  }
- for(const scene of journeyScenes){
+ for(const scene of scenes){
   if(seenScenes.has(scene.id))continue;
   const dx=scene.x-player.x,dz=scene.z-player.z,dist=Math.hypot(dx,dz);
   const facing=(-Math.sin(player.yaw)*dx-Math.cos(player.yaw)*dz)/Math.max(dist,.01);
@@ -1184,7 +1309,7 @@ canvas.addEventListener('pointerdown',e=>{
  e.preventDefault();canvas.setPointerCapture(e.pointerId);canvas.focus({preventScroll:true});resumeAudio();
 });
 canvas.addEventListener('pointermove',e=>{
- if(GRID_MODE){if(gridGesture.move(e))e.preventDefault();return;}
+ if(GRID_MODE){if(gridGesture.move(e,e.timeStamp/1000))e.preventDefault();return;}
  const wasHeld=gestures.held;
  if(gestures.move(e))e.preventDefault();else if(wasHeld&&!gestures.held)settleInput();
 });
@@ -1255,7 +1380,7 @@ let audioCtx,master,footBuffers={},footDistance=0,feetMoving=false,footSide=0,fo
 // Footsteps follow each drawn ribbon's own half-width (1.45 m or 4.2 m) plus the original 0.15 m margin.
 const onRoad=(x,z)=>roadSegments.some(r=>distanceToRoute(x,z,[r.ends])<r.w+.15);
 function surfaceAt(x,z){
- if((Math.abs(x+4)<2.35&&Math.abs(z+13)<1.9)||steppingStones.some(([a,b])=>((x-a)/.38)**2+((z-b)/.29)**2<1))return 'stone';
+ if((Math.abs(x-sx)<2.35&&Math.abs(z-sz)<1.9)||steppingStones.some(([a,b])=>((x-a)/.38)**2+((z-b)/.29)**2<1))return 'stone';
  if(height(x,z)<1.05||onRoad(x,z))return 'sand';
  return 'grass';
 }
@@ -1308,28 +1433,53 @@ function updateFootsteps(distance,dt){
 function chime(){if(!audioCtx||audioCtx.state!=='running')return;for(const [i,f] of [523.25,783.99].entries()){const o=audioCtx.createOscillator(),g=audioCtx.createGain(),t=audioCtx.currentTime+i*.15;o.type='sine';o.frequency.value=f;g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(.035,t+.03);g.gain.exponentialRampToValueAtTime(.0001,t+2);o.connect(g);g.connect(master);o.start(t);o.stop(t+2);}}
 // A small hand-drawn automap of visited cells, as in a dungeon crawler. North is always up.
 const automap=document.querySelector('#automap'),automapCtx=automap?.getContext('2d');
+// Dark glass with pale visited cells, sand-coloured roads, walls where a step is blocked, islanders and a large
+// heading arrow. North is always up.
+const npcCells=npcs.map(n=>cellIndex(n.x,n.z));
 function drawAutomap(){
  if(!walker||!automapCtx)return;
- const key=walker.i+','+walker.j+','+walker.heading+','+walker.visited.size+','+automapShown;
+ const key=walker.i+','+walker.j+','+walker.heading+','+walker.visited.size+','+automapShown+','+innerWidth+'x'+innerHeight;
  if(key===automapKey)return;automapKey=key;
  automap.hidden=!automapShown;if(!automapShown)return;
- const ratio=Math.min(devicePixelRatio||1,2),size=112,radius=7,unit=size/(radius*2+1);
- if(automap.width!==size*ratio){automap.width=automap.height=size*ratio;}
+ const size=automap.clientWidth||148,ratio=Math.min(devicePixelRatio||1,2),radius=6,unit=size/(radius*2+1);
+ if(automap.width!==Math.round(size*ratio)){automap.width=automap.height=Math.round(size*ratio);}
  const c=automapCtx;c.setTransform(ratio,0,0,ratio,0,0);c.clearRect(0,0,size,size);
- c.fillStyle='#eef0e4b8';c.fillRect(0,0,size,size);
- c.fillStyle='#8fa596';
- for(const [di,dj] of automapCells(walker,radius))c.fillRect((di+radius)*unit+.5,(dj+radius)*unit+.5,unit-1,unit-1);
- const cx=(radius+.5)*unit,cy=(radius+.5)*unit,a=walker.heading*Math.PI/2;
- c.save();c.translate(cx,cy);c.rotate(a);c.fillStyle='#2f4a40';c.beginPath();c.moveTo(0,-unit*.62);c.lineTo(unit*.45,unit*.42);c.lineTo(-unit*.45,unit*.42);c.closePath();c.fill();c.restore();
- c.fillStyle='#2f4a40';c.font='10px sans-serif';c.textAlign='left';c.fillText('N',4,12);
+ c.fillStyle='rgba(38,58,52,.74)';c.fillRect(0,0,size,size);
+ const near=(i,j)=>Math.abs(i-walker.i)<=radius&&Math.abs(j-walker.j)<=radius;
+ for(const [di,dj] of automapCells(walker,radius)){
+  const road=roadCells.has((walker.i+di)+','+(walker.j+dj));
+  c.fillStyle=road?'#e8d6a8':'#c9d8c6';c.fillRect((di+radius)*unit+.75,(dj+radius)*unit+.75,unit-1.5,unit-1.5);
+ }
+ // Walls, as in a dungeon map: a line on each side of a visited cell that cannot be stepped through.
+ c.strokeStyle='#f3efe0';c.lineWidth=2;c.lineCap='round';c.beginPath();
+ for(const [di,dj] of automapCells(walker,radius)){
+  const i=walker.i+di,j=walker.j+dj,x0=(di+radius)*unit,y0=(dj+radius)*unit;
+  if(!walker.canStep(i,j,i,j-1)){c.moveTo(x0+1,y0+1);c.lineTo(x0+unit-1,y0+1);}
+  if(!walker.canStep(i,j,i+1,j)){c.moveTo(x0+unit-1,y0+1);c.lineTo(x0+unit-1,y0+unit-1);}
+  if(!walker.canStep(i,j,i,j+1)){c.moveTo(x0+1,y0+unit-1);c.lineTo(x0+unit-1,y0+unit-1);}
+  if(!walker.canStep(i,j,i-1,j)){c.moveTo(x0+1,y0+1);c.lineTo(x0+1,y0+unit-1);}
+ }
+ c.stroke();
+ // Islanders appear once a visited cell touches theirs.
+ c.fillStyle='#d98aa7';
+ for(const [i,j] of npcCells){
+  if(!near(i,j))continue;
+  let seen=false;for(let dj=-1;dj<=1&&!seen;dj++)for(let di=-1;di<=1;di++)if(walker.visited.has((i+di)+','+(j+dj))){seen=true;break;}
+  if(seen){c.beginPath();c.arc((i-walker.i+radius+.5)*unit,(j-walker.j+radius+.5)*unit,unit*.3,0,Math.PI*2);c.fill();}
+ }
+ const cx=(radius+.5)*unit,cy=(radius+.5)*unit;
+ c.save();c.translate(cx,cy);c.rotate(walker.heading*Math.PI/2);c.beginPath();c.moveTo(0,-unit*.78);c.lineTo(unit*.58,unit*.52);c.lineTo(0,unit*.22);c.lineTo(-unit*.58,unit*.52);c.closePath();
+ c.fillStyle='#f6b26b';c.fill();c.lineWidth=1.5;c.strokeStyle='#263a34';c.stroke();c.restore();
+ c.font='bold 11px sans-serif';c.textAlign='center';c.textBaseline='top';c.fillStyle='#f3f0e2';c.fillText('N',size/2,3);
+ c.textAlign='left';c.fillText(HEADING_NAMES[walker.heading],5,3);
  automap.setAttribute('aria-label','地図：'+HEADING_NAMES[walker.heading]+'を向いています。歩いたマス '+walker.visited.size);
 }
 if(GRID_MODE){
  document.body.classList.add('grid-mode');
- canvas.setAttribute('aria-label',canvas.getAttribute('aria-label').split('。')[0]+'。マス目を一つずつ歩きます。W/Sで一マス前後、A/Dで横へ一マス、Q/Eまたは左右矢印で90度向きを変えます。画面下半分で上下に滑らせると前後、左右で向きを変えます。軽く触れると一マス進みます。');
- const notes=document.querySelector('.notes p');if(notes)notes.innerHTML='マス目をひとつずつ歩く試作版。画面の下半分で、上へ滑らせて前進、<br>下で後退、左右で90度の向き替え。軽く触れると一マス。PCは W A S D · Q E · ← →。';
+ canvas.setAttribute('aria-label',canvas.getAttribute('aria-label').split('。')[0]+'。マス目を一つずつ歩きます。W/Sで一マス前後、A/Dで横へ一マス、Q/Eまたは左右矢印で90度向きを変えます。画面下半分で上下に滑らせると前後、左右にはじくと向きを変え、押したまま左右に滑らせると横歩きします。軽く触れると一マス進みます。');
+ const notes=document.querySelector('.notes p');if(notes)notes.innerHTML='マス目をひとつずつ歩く。画面の下半分で、上へ滑らせて前進、下で後退。<br>左右にはじくと向き替え、押したまま左右でカニ歩き。軽く触れると一マス。<br>PCは W A S D · Q E · ← →。';
  const book=document.querySelector('.book-controls');
- if(book)book.innerHTML='<h3>マス目を歩く</h3><p>画面の下半分で上へ滑らせると一マス前へ。<br>保持すると歩き続けます。下で後退、左右で90度の向き替え。<br>軽く触れると一マス進みます。</p><p class="keyboard-notes">PC：W / S で前後 ／ A / D で横へ一マス ／ Q E ・ ← → で向き替え<br>Shift で早足 ／ M で地図 ／ H でしおり ／ Esc で入力解除</p>';
+ if(book)book.innerHTML='<h3>マス目を歩く</h3><p>画面の下半分で上へ滑らせると前へ。保持すると歩き続けます。<br>下へ滑らせると、前を向いたまま後ろへ。<br>左右にさっとはじくと90度の向き替え。<br>少し押したまま（歩きながらでも）左右へ滑らせるとカニ歩き。<br>軽く触れると一マス進みます。</p><p class="keyboard-notes">PC：W / S で前後 ／ A / D で横へ一マス ／ Q E ・ ← → で向き替え<br>Shift で早足 ／ M で地図 ／ H でしおり ／ Esc で入力解除</p>';
 }
 function begin(){if(started||contextLost)return;started=true;notices.clear();document.body.classList.add('playing');canvas.focus();audio();}
 const beginButton=document.querySelector('#begin');beginButton.addEventListener('click',begin);beginButton.disabled=false;beginButton.removeAttribute('aria-busy');
@@ -1339,7 +1489,7 @@ canvas.addEventListener('webglcontextlost',()=>{
  const error=document.querySelector('#error');error.textContent='島を読み込めませんでした。ページを開き直してください。';error.hidden=false;
 });
 // Minimal diagnostic state for development; no interface is added during play.
-window.nagi={get release(){return document.querySelector('meta[name="nagi-release"]')?.content||'local'},get position(){return{x:player.x,z:player.z,yaw:player.yaw}},get camera(){return{...camera}},get turningRate(){return player.yawRate},get continuousRun(){return player.runSeconds},get surge(){return player.surge},get collisionChecks(){return collisionWorld.checks},get actualSpeed(){return player.actualSpeed},get blockedFor(){return player.blockedFor},get monuments(){return monuments.length},get renderedVertices(){return drawnVertices},get drawCalls(){return drawCalls},get started(){return started},get speed(){return Math.hypot(player.vx,player.vz)},get dragging(){return gestures.held},get fov(){return CAMERA_FOV},get greetingDistance(){return lastGreetingDistance},get footsteps(){return footstepCount},get audioState(){return audioCtx?.state||'unavailable'},get footSurface(){return lastFootSurface},get worldVertices(){return terrain.count+roadChunks.reduce((n,b)=>n+b.count,0)+world.count+sea.count+scenery.reduce((n,b)=>n+b.count,0)+movingSails.reduce((n,b)=>n+b.count,0)+birdMesh.count},get places(){return [...shownPlaces]},get islanders(){return npcs.length},get greeted(){return npcs.reduce((a,n)=>a+n.index,0)},get grid(){return walker?{i:walker.i,j:walker.j,heading:walker.heading,steps:walker.steps,turns:walker.turns,bumps:walker.bumps,visited:walker.visited.size,busy:walker.busy,automap:!automap.hidden}:null}};
+window.nagi={get release(){return document.querySelector('meta[name="nagi-release"]')?.content||'local'},get position(){return{x:player.x,z:player.z,yaw:player.yaw}},get camera(){return{...camera}},get turningRate(){return player.yawRate},get continuousRun(){return player.runSeconds},get surge(){return player.surge},get collisionChecks(){return collisionWorld.checks},get actualSpeed(){return player.actualSpeed},get blockedFor(){return player.blockedFor},get monuments(){return monuments.length},get renderedVertices(){return drawnVertices},get drawCalls(){return drawCalls},get started(){return started},get speed(){return Math.hypot(player.vx,player.vz)},get dragging(){return gestures.held},get fov(){return CAMERA_FOV},get greetingDistance(){return lastGreetingDistance},get footsteps(){return footstepCount},get audioState(){return audioCtx?.state||'unavailable'},get footSurface(){return lastFootSurface},get worldVertices(){return terrain.count+roadChunks.reduce((n,b)=>n+b.count,0)+world.count+sea.count+scenery.reduce((n,b)=>n+b.count,0)+movingSails.reduce((n,b)=>n+b.count,0)+birdMesh.count},get places(){return [...shownPlaces]},get islanders(){return npcs.length},get greeted(){return npcs.reduce((a,n)=>a+n.index,0)},get grid(){return walker?{cell:CELL,road:roadCells.has(walker.i+','+walker.j),i:walker.i,j:walker.j,heading:walker.heading,steps:walker.steps,turns:walker.turns,bumps:walker.bumps,visited:walker.visited.size,busy:walker.busy,automap:!automap.hidden}:null}};
 
 </script>
 </body></html>

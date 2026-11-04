@@ -1,4 +1,4 @@
-"""Default grid mode (root entrance): one cell per step, quarter turns, automap, touch slides and the free-walk default."""
+"""Default grid mode (root entrance): grid-aligned roads and props, gliding steps, quarter turns, crab walk, automap."""
 import os,atexit,math,subprocess,time
 from pathlib import Path
 from playwright.sync_api import sync_playwright
@@ -6,19 +6,47 @@ root=Path(__file__).resolve().parents[1]
 base='http://127.0.0.1:4176/'
 server=subprocess.Popen(['python3','-m','http.server','4176','--bind','127.0.0.1','--directory',str(root)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
 atexit.register(server.terminate);time.sleep(.5)
+# Test-only access is appended to the local response, never shipped in the game.
+probe="""
+window._gridQA={
+ canStep:(i,j,ni,nj)=>walker.canStep(i,j,ni,nj),
+ roads(){const bad=[];for(const points of routes){const c=gridCells(points,GRID_ORIGIN,CELL);for(let k=1;k<c.length;k++){const [a,b]=[c[k-1],c[k]];if(!walker.canStep(a[0],a[1],b[0],b[1])||!walker.canStep(b[0],b[1],a[0],a[1]))bad.push([a,b]);}}return bad;},
+ reach(){
+  const seen=new Set(['0,0']),queue=[[0,0]];
+  while(queue.length){const [i,j]=queue.pop();for(const [dx,dz] of [[0,-1],[1,0],[0,1],[-1,0]]){const k=(i+dx)+','+(j+dz);if(!seen.has(k)&&walker.canStep(i,j,i+dx,j+dz)){seen.add(k);queue.push([i+dx,j+dz]);}}}
+  const cells=[...seen].map(k=>k.split(',').map(Number)).map(([i,j])=>cellCentre(i,j)),near=(x,z,r)=>cells.some(([a,b])=>Math.hypot(a-x,b-z)<r);
+  return {cells:cells.length,places:landmarks.filter(([,,x,z,r])=>!near(x,z,r)).map(l=>l[0]),islanders:npcs.filter(n=>!near(n.x,n.z,4.8)).map(n=>n.name),scenes:scenes.filter(s=>!near(s.x,s.z,s.radius)).map(s=>s.id),
+   islandersOnGrid:npcs.every(n=>{const [i,j]=cellIndex(n.x,n.z),[x,z]=cellCentre(i,j);return Math.abs(x-n.x)<1e-9&&Math.abs(z-n.z)<1e-9&&!roadCells.has(i+','+j);})};
+ }
+};
+"""
+source=(root/'dist/island.js').read_text()+probe
+def install(target):target.route('**/island.js?*',lambda r:r.fulfill(status=200,content_type='application/javascript',body=source))
 
 def settle(page):
  # Software rendering can run the fixed 60 Hz simulation slower than real time: wait until a quiet cell persists.
  last=None
- for _ in range(60):
+ for _ in range(80):
   page.wait_for_timeout(250);now=page.evaluate('[nagi.grid.busy,nagi.position,nagi.grid.steps,nagi.grid.turns,nagi.grid.bumps]')
   if not now[0] and now==last:return
   last=now
  raise AssertionError('walker never settled')
-def on_grid(p):
- i=(p['x']-8)/3;j=(p['z']-30)/3
+def cell(page):
+ p=page.evaluate('nagi.position');c=page.evaluate('nagi.grid.cell')
+ i=(p['x']-8)/c;j=(p['z']-30)/c
  assert abs(i-round(i))<1e-9 and abs(j-round(j))<1e-9,p
  return round(i),round(j)
+HEADINGS=[(0,-1),(1,0),(0,1),(-1,0)]
+OFFSET={'w':0,'d':1,'s':2,'a':3}
+def expect_step(page,key):
+ """Press a movement key once: one cell if the edge is open, otherwise a bump that neither moves nor sounds."""
+ i,j=cell(page);h=page.evaluate('nagi.grid.heading');dx,dz=HEADINGS[(h+OFFSET[key])%4]
+ open_=page.evaluate('([a,b,c,d])=>_gridQA.canStep(a,b,c,d)',[i,j,i+dx,j+dz])
+ steps,bumps,feet=page.evaluate('[nagi.grid.steps,nagi.grid.bumps,nagi.footsteps]')
+ page.keyboard.press(key);settle(page)
+ if open_:assert cell(page)==(i+dx,j+dz) and page.evaluate('nagi.grid.steps')==steps+1 and page.evaluate('nagi.footsteps')==feet+1
+ else:assert cell(page)==(i,j) and page.evaluate('nagi.grid.bumps')==bumps+1 and page.evaluate('nagi.footsteps')==feet
+ return open_
 
 with sync_playwright() as pw:
  browser=pw.chromium.launch(executable_path=os.environ.get('CHROMIUM_PATH','/usr/bin/chromium'),headless=True,args=['--no-sandbox','--use-angle=swiftshader','--enable-unsafe-swiftshader'])
@@ -31,66 +59,78 @@ with sync_playwright() as pw:
  page.locator('#begin').click();page.wait_for_timeout(300);assert not page.locator('#automap').is_visible()
  page.close()
 
- page=browser.new_page(viewport={'width':1280,'height':800});page.on('pageerror',lambda e:errors.append(str(e)))
- page.goto(base,wait_until='networkidle');page.wait_for_function('!!window.nagi && !!nagi.grid',timeout=30000)
+ page=browser.new_page(viewport={'width':1280,'height':800});page.on('pageerror',lambda e:errors.append(str(e)));install(page)
+ page.goto(base,wait_until='networkidle');page.wait_for_function('!!window.nagi && !!nagi.grid && !!window._gridQA',timeout=30000)
+ assert page.evaluate('nagi.grid.cell')==4.5
+ # Layout: every road cell can be walked both ways (no prop on a road), islanders sit on free cells,
+ # and every place name, islander greeting and quiet scene can be reached from the landing.
+ assert page.evaluate('_gridQA.roads()')==[]
+ reach=page.evaluate('_gridQA.reach()')
+ assert reach['places']==[] and reach['islanders']==[] and reach['scenes']==[] and reach['islandersOnGrid'],reach
+ print('layout:',reach['cells'],'reachable cells; all roads open; all places, islanders and scenes reachable',flush=True)
  assert 'マス目' in page.locator('.notes p').inner_text()
  page.locator('#begin').click();page.wait_for_function("getComputedStyle(document.querySelector('#arrival')).visibility === 'hidden'",timeout=15000)
- start=page.evaluate('nagi.position');assert on_grid(start)==(0,0) and start['yaw']==0
+ start=page.evaluate('nagi.position');assert cell(page)==(0,0) and start['yaw']==0 and page.evaluate('nagi.grid.road')
  assert page.locator('#automap').is_visible() and page.evaluate('nagi.grid.automap')
- # A short key press is exactly one cell north, with one footstep.
- steps=page.evaluate('nagi.footsteps');page.keyboard.press('w');settle(page)
- p=page.evaluate('nagi.position');assert on_grid(p)==(0,-1),p
- assert page.evaluate('nagi.footsteps')==steps+1 and page.evaluate('nagi.grid.steps')==1
- # Holding keeps stepping; releasing stops on a cell centre with no further steps.
- page.keyboard.down('w');page.wait_for_function('nagi.grid.steps>=4',timeout=15000);page.keyboard.up('w');settle(page)
- held=page.evaluate('nagi.grid.steps');p=page.evaluate('nagi.position');i,j=on_grid(p);assert i==0 and j==-held
- page.wait_for_timeout(600);assert page.evaluate('nagi.grid.steps')==held and page.evaluate('nagi.position')==p
- # Quarter turns keep the cell; a side-step follows the new heading.
- page.keyboard.press('e');settle(page);q=page.evaluate('nagi.position');assert abs(q['yaw']+math.pi/2)<1e-9 and on_grid(q)==(i,j)
- assert page.evaluate('nagi.grid.heading')==1 and page.evaluate('nagi.footsteps')==steps+held
- page.keyboard.press('d');settle(page);assert on_grid(page.evaluate('nagi.position'))==(i,j+1)
- page.keyboard.press('ArrowLeft');settle(page);assert page.evaluate('nagi.grid.heading')==0
- page.keyboard.press('s');settle(page);assert on_grid(page.evaluate('nagi.position'))==(i,j+2)
- # Walking into the sea bumps without moving or adding a footstep.
- page.keyboard.press('ArrowRight');settle(page);page.keyboard.press('ArrowRight');settle(page)
- assert page.evaluate('nagi.grid.heading')==2
- page.keyboard.down('w');page.wait_for_function('nagi.grid.bumps>=1',timeout=30000);page.keyboard.up('w');settle(page)
- edge=page.evaluate('nagi.position');shore_steps=page.evaluate('nagi.footsteps')
- page.keyboard.press('w');settle(page)
- assert page.evaluate('nagi.position')==edge and page.evaluate('nagi.footsteps')==shore_steps and page.evaluate('nagi.grid.bumps')>=2
- # M hides and shows the automap; the travel book pauses stepping.
+ box=page.locator('#automap').bounding_box();assert box['width']>=140,box
+ # Face along a corridor with four open cells, then single presses, a held glide and its stop.
+ for turn in range(4):
+  i,j=cell(page);h=page.evaluate('nagi.grid.heading');dx,dz=HEADINGS[h]
+  if all(page.evaluate('([a,b,c,d])=>_gridQA.canStep(a,b,c,d)',[i+dx*k,j+dz*k,i+dx*(k+1),j+dz*(k+1)]) for k in range(5)):break
+  page.keyboard.press('e');settle(page)
+ else:raise AssertionError('no open corridor from the landing')
+ assert expect_step(page,'w')
+ before=page.evaluate('nagi.grid.steps');i,j=cell(page)
+ page.keyboard.down('w');page.wait_for_function(f'nagi.grid.steps>={before+3}',timeout=15000);page.keyboard.up('w');settle(page)
+ held=page.evaluate('nagi.grid.steps')-before;h=page.evaluate('nagi.grid.heading');dx,dz=HEADINGS[h]
+ assert cell(page)==(i+dx*held,j+dz*held)
+ p=page.evaluate('nagi.position');page.wait_for_timeout(600);assert page.evaluate('nagi.position')==p
+ # Quarter turns keep the cell; side-steps and the backward step keep the heading.
+ page.keyboard.press('e');settle(page);assert page.evaluate('nagi.grid.heading')==(h+1)%4 and cell(page)==(i+dx*held,j+dz*held)
+ for key in ['d','a','s','w']:expect_step(page,key)
+ assert page.evaluate('nagi.grid.heading')==(h+1)%4
+ page.keyboard.press('ArrowLeft');settle(page);assert page.evaluate('nagi.grid.heading')==h
+ # Walking on until the sea or a prop: a bump neither moves nor adds a footstep.
+ page.keyboard.down('w');page.wait_for_function('nagi.grid.bumps>=1',timeout=60000);page.keyboard.up('w');settle(page)
+ edge=page.evaluate('nagi.position');shore=page.evaluate('nagi.footsteps');assert not expect_step(page,'w')
+ assert page.evaluate('nagi.position')==edge and page.evaluate('nagi.footsteps')==shore
+ # M hides and shows the automap; the travel book explains the controls.
  page.keyboard.press('m');page.wait_for_timeout(100);assert not page.locator('#automap').is_visible()
  page.keyboard.press('m');page.wait_for_timeout(100);assert page.locator('#automap').is_visible()
- page.keyboard.press('h');page.wait_for_timeout(200);assert 'マス目を歩く' in page.locator('.book-controls').inner_text()
+ page.keyboard.press('h');page.wait_for_timeout(200);assert 'カニ歩き' in page.locator('.book-controls').inner_text()
  page.keyboard.press('Escape');page.wait_for_timeout(200)
  page.screenshot(path=str(root/'grid-desktop.png'))
- # The first islander greets a walker who steps along the landing path.
- page.reload(wait_until='networkidle');page.wait_for_function('!!window.nagi && !!nagi.grid');page.locator('#begin').click()
- page.keyboard.down('w');page.wait_for_function('nagi.greeted>0',timeout=60000);page.keyboard.up('w')
- assert page.locator('#speaker').inner_text()=='浜のひと'
  page.close()
 
- # Touch: tap is one step, an upward slide repeats, a sideways slide turns, release stops, upper half is ignored.
+ # Touch: upper half ignored; tap is one action; a held slide repeats; a flick turns; rest-then-slide crabs.
  context=browser.new_context(viewport={'width':390,'height':844},is_mobile=True,has_touch=True)
- mobile=context.new_page();mobile.on('pageerror',lambda e:errors.append(str(e)))
+ mobile=context.new_page();mobile.on('pageerror',lambda e:errors.append(str(e)));install(mobile)
  mobile.goto(base,wait_until='networkidle');mobile.wait_for_function('!!window.nagi && !!nagi.grid',timeout=30000)
  mobile.locator('#begin').tap();mobile.wait_for_function("getComputedStyle(document.querySelector('#arrival')).visibility === 'hidden'",timeout=15000)
  cdp=context.new_cdp_session(mobile)
  def touch(kind,x=0,y=0):
   cdp.send('Input.dispatchTouchEvent',{'type':kind,'touchPoints':[] if kind in ['touchEnd','touchCancel'] else [{'x':x,'y':y,'id':1}]})
+ actions=lambda:mobile.evaluate('nagi.grid.steps+nagi.grid.bumps')
  touch('touchStart',195,250);touch('touchMove',195,150);mobile.wait_for_timeout(500);touch('touchEnd');mobile.wait_for_timeout(300)
- assert mobile.evaluate('nagi.grid.steps')==0
- touch('touchStart',195,700);touch('touchEnd');settle(mobile);assert mobile.evaluate('nagi.grid.steps')==1
- touch('touchStart',195,700);touch('touchMove',195,640);mobile.wait_for_function('nagi.grid.steps>=4',timeout=15000);touch('touchEnd');settle(mobile)
- stopped=mobile.evaluate('nagi.grid.steps');mobile.wait_for_timeout(600);assert mobile.evaluate('nagi.grid.steps')==stopped
- touch('touchStart',195,700);touch('touchMove',260,705);mobile.wait_for_function('nagi.grid.turns>=1',timeout=15000);touch('touchEnd');settle(mobile)
- assert mobile.evaluate('nagi.grid.steps')==stopped
+ assert actions()==0
+ touch('touchStart',195,700);touch('touchEnd');settle(mobile);assert actions()==1
+ touch('touchStart',195,700);touch('touchMove',195,640);mobile.wait_for_function('nagi.grid.steps+nagi.grid.bumps>=4',timeout=15000);touch('touchEnd');settle(mobile)
+ done=actions();mobile.wait_for_timeout(600);assert actions()==done
+ turns=mobile.evaluate('nagi.grid.turns')
+ touch('touchStart',195,700);touch('touchMove',260,705);mobile.wait_for_function(f'nagi.grid.turns>{turns}',timeout=15000);touch('touchEnd');settle(mobile)
+ assert actions()==done
+ # Long press, then slide sideways: side-steps with the heading unchanged.
+ heading=mobile.evaluate('nagi.grid.heading');turns=mobile.evaluate('nagi.grid.turns')
+ touch('touchStart',195,700);mobile.wait_for_timeout(500);touch('touchMove',270,702)
+ mobile.wait_for_function(f'nagi.grid.steps+nagi.grid.bumps>={done+2}',timeout=15000);touch('touchEnd');settle(mobile)
+ assert mobile.evaluate('nagi.grid.turns')==turns and mobile.evaluate('nagi.grid.heading')==heading
  box=mobile.locator('#automap').bounding_box();assert box and box['y']+box['height']<844/2,box
- mobile.wait_for_function('nagi.greeted>0',timeout=15000)
+ # The greeting sits clear of the larger map.
+ mobile.evaluate("document.querySelector('#greeting').setAttribute('aria-hidden','false')")
  words=mobile.locator('#greeting').bounding_box()
  overlap=min(box['x']+box['width'],words['x']+words['width'])-max(box['x'],words['x'])>0 and min(box['y']+box['height'],words['y']+words['height'])-max(box['y'],words['y'])>0
  assert not overlap,(box,words)
  mobile.screenshot(path=str(root/'grid-mobile.png'))
  assert not errors,errors
  browser.close()
-print('default grid mode: single-cell steps, held repeat, quarter turns, side-steps, shore bumps, automap, greetings and touch slides passed')
+print('default grid mode: grid layout, single and gliding steps, quarter turns, crab walk, shore bumps, automap and touch passed')
