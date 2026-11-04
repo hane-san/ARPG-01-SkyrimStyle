@@ -2,7 +2,7 @@
 // No DOM, WebGL or audio. The world supplies walkable(), height() and the swept move() of CollisionWorld.
 // 4.5 m cells. A held walk glides through cells at a constant 18.75 m/s (Shift: about 26 m/s);
 // it eases in from rest and eases out when the finger or key lets go, instead of pausing at every cell.
-export const CELL=4.5,GRID_ORIGIN=Object.freeze([8,30]),STEP_SECONDS=.24,QUICK_STEP_SECONDS=.17,TURN_SECONDS=.18,TURN_REPEAT_PAUSE=.14,BUMP_SECONDS=.18,EYE_HEIGHT=1.65;
+export const CELL=4.5,GRID_ORIGIN=Object.freeze([8,30]),STEP_SECONDS=.24,QUICK_STEP_SECONDS=.17,TURN_SECONDS=.3,TURN_REPEAT_PAUSE=.28,BUMP_SECONDS=.18,EYE_HEIGHT=1.65;
 // Headings are compass quarters: 0 north (-z), 1 east (+x), 2 south (+z), 3 west (-x).
 export const HEADINGS=Object.freeze([[0,-1],[1,0],[0,1],[-1,0]]);
 export const HEADING_NAMES=Object.freeze(['北','東','南','西']);
@@ -128,7 +128,7 @@ export function keyCommand(code){return KEY_COMMANDS[code]||null;}
 // Touch: one finger in the lower half. Slide up/down to step forward/back (back keeps facing forward).
 // A quick sideways flick turns a quarter. A sideways slide that starts after the finger has rested or walked
 // for HOLD_SECONDS side-steps instead (crab walk). Holding repeats; a short tap is one step forward.
-export const SWIPE_DISTANCE=22,TAP_DISTANCE=10,TAP_SECONDS=.3,HOLD_SECONDS=.3;
+export const SWIPE_DISTANCE=22,TAP_DISTANCE=10,TAP_SECONDS=.3,HOLD_SECONDS=.2;
 export function swipeCommand(dx,dy,crab=false){
  if(Math.hypot(dx,dy)<SWIPE_DISTANCE)return null;
  if(Math.abs(dy)>=Math.abs(dx))return dy<0?'forward':'back';

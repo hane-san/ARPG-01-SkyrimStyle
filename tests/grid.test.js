@@ -27,12 +27,12 @@ test('a command is refused while an action plays, then accepted',()=>{
 
 test('quarter turns rotate in place and side-steps follow the heading',()=>{
  const w=new GridWalker(flat(),{origin:[0,0]});
- assert.equal(w.command('turnRight'),'turn');run(w,TURN_SECONDS+.2);
+ assert.equal(w.command('turnRight'),'turn');run(w,TURN_SECONDS+.35);
  assert.equal(w.heading,1);assert.equal(w.x,0);assert.equal(w.z,0);assert.ok(Math.abs(w.yaw-headingYaw(1))<1e-12);
  w.command('forward');run(w,.3);assert.deepEqual([w.i,w.j],[1,0]);
  w.command('strafeRight');run(w,.3);assert.deepEqual([w.i,w.j],[1,1]);
  w.command('strafeLeft');run(w,.3);w.command('back');run(w,.3);assert.deepEqual([w.i,w.j],[0,0]);
- for(let n=0;n<3;n++){w.command('turnLeft');run(w,.4);}assert.equal(w.heading,2);
+ for(let n=0;n<3;n++){w.command('turnLeft');run(w,TURN_SECONDS+.35);}assert.equal(w.heading,2);
 });
 
 test('water and props block a step; a blocked step bumps back without travelling',()=>{
@@ -128,4 +128,13 @@ test('roads lie on the grid as 4-connected cells and stay walkable from end to e
   // Straight runs merge; every corner is a right angle.
   const line=gridRoute(points);for(let k=1;k<line.length;k++)assert.ok(line[k][0]===line[k-1][0]||line[k][1]===line[k-1][1]);
  }
+});
+
+test('a quarter turn is unhurried and a held turn pauses between quarters; a short hold is enough to crab',()=>{
+ const w=new GridWalker(flat(),{origin:[0,0]});
+ assert.ok(TURN_SECONDS>=.28);w.command('turnRight');run(w,.2);assert.ok(w.busy&&w.yaw>-Math.PI/2+.05,'still turning after 0.2 s');
+ run(w,TURN_SECONDS);assert.equal(w.command('turnRight'),null,'a held turn waits before the next quarter');
+ assert.ok(HOLD_SECONDS<=.2);
+ const g=new GridGesture(),b={top:0,height:800},touch=(x,y)=>({pointerId:9,pointerType:'touch',clientX:x,clientY:y,button:0,buttons:1,isPrimary:true});
+ g.begin(touch(200,600),b,0);g.move(touch(260,600),HOLD_SECONDS+.01);assert.equal(g.command,'strafeRight');
 });
