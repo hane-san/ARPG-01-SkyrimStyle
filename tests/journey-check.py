@@ -132,7 +132,11 @@ with sync_playwright() as p:
 
     # The actual shader receives changing rotor angles; reduced-motion freezes them.
     page.evaluate('_journeyQA.look(910,-570,Math.PI);_rolls=[]')
-    page.wait_for_timeout(1200)
+    # Wait for frames rather than a fixed time: software-rendered CI can draw only a few frames per second.
+    try:
+        page.wait_for_function('new Set(_rolls.map(v=>v.toFixed(4))).size > 5', timeout=15000)
+    except Exception:
+        pass
     moving_rolls = page.evaluate('_rolls')
     assert len({round(v, 4) for v in moving_rolls}) > 5, 'windmill shader angles did not advance'
     page.emulate_media(reduced_motion='reduce')

@@ -119,20 +119,26 @@ with sync_playwright() as pw:
  mobile.goto(base,wait_until='networkidle');mobile.wait_for_function('!!window.nagi && !!nagi.grid',timeout=30000)
  mobile.locator('#begin').tap();mobile.wait_for_function("getComputedStyle(document.querySelector('#arrival')).visibility === 'hidden'",timeout=15000)
  cdp=context.new_cdp_session(mobile)
- def touch(kind,x=0,y=0):
-  cdp.send('Input.dispatchTouchEvent',{'type':kind,'touchPoints':[] if kind in ['touchEnd','touchCancel'] else [{'x':x,'y':y,'id':1}]})
+ # Explicit event times stand for the finger's real timing: software rendering can otherwise delay a release
+ # by more than the 0.3 s tap window, or a flick past the 0.2 s crab threshold.
+ def touch(kind,x=0,y=0,at=None):
+  event={'type':kind,'touchPoints':[] if kind in ['touchEnd','touchCancel'] else [{'x':x,'y':y,'id':1}]}
+  if at is not None:event['timestamp']=at
+  cdp.send('Input.dispatchTouchEvent',event)
  actions=lambda:mobile.evaluate('nagi.grid.steps+nagi.grid.bumps')
  touch('touchStart',195,250);touch('touchMove',195,150);mobile.wait_for_timeout(500);touch('touchEnd');mobile.wait_for_timeout(300)
  assert actions()==0
- touch('touchStart',195,700);touch('touchEnd');settle(mobile);assert actions()==1
+ t=time.time();touch('touchStart',195,700,t);touch('touchEnd',at=t+.06);settle(mobile);assert actions()==1,mobile.evaluate('nagi.grid')
+ # A press held longer than the tap window is not a step.
+ t=time.time();touch('touchStart',195,700,t);touch('touchEnd',at=t+.6);settle(mobile);assert actions()==1
  touch('touchStart',195,700);touch('touchMove',195,640);mobile.wait_for_function('nagi.grid.steps+nagi.grid.bumps>=4',timeout=15000);touch('touchEnd');settle(mobile)
  done=actions();mobile.wait_for_timeout(600);assert actions()==done
  turns=mobile.evaluate('nagi.grid.turns')
- touch('touchStart',195,700);touch('touchMove',260,705);mobile.wait_for_function(f'nagi.grid.turns>{turns}',timeout=15000);touch('touchEnd');settle(mobile)
+ t=time.time();touch('touchStart',195,700,t);touch('touchMove',260,705,t+.08);mobile.wait_for_function(f'nagi.grid.turns>{turns}',timeout=15000);touch('touchEnd');settle(mobile)
  assert actions()==done
  # Long press, then slide sideways: side-steps with the heading unchanged.
  heading=mobile.evaluate('nagi.grid.heading');turns=mobile.evaluate('nagi.grid.turns')
- touch('touchStart',195,700);mobile.wait_for_timeout(500);touch('touchMove',270,702)
+ t=time.time();touch('touchStart',195,700,t);mobile.wait_for_timeout(300);touch('touchMove',270,702,t+.25)
  mobile.wait_for_function(f'nagi.grid.steps+nagi.grid.bumps>={done+2}',timeout=15000);touch('touchEnd');settle(mobile)
  assert mobile.evaluate('nagi.grid.turns')==turns and mobile.evaluate('nagi.grid.heading')==heading
  box=mobile.locator('#automap').bounding_box();assert box and box['y']+box['height']<844/2,box
