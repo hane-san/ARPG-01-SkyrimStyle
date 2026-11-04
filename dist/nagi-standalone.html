@@ -586,8 +586,9 @@ function automapCells(walker,radius){
  return cells;
 }
 
-// Opt-in dungeon-crawler travel: the same island, walked one grid cell at a time. Free walking stays the default.
-const GRID_MODE=new URLSearchParams(location.search).get('grid')==='1';
+// Dungeon-crawler travel is the default (producer decision 2026-11-04): the same island, one grid cell at a time.
+// ?grid=0 keeps the earlier free walking for comparison and its regression checks.
+const GRID_MODE=new URLSearchParams(location.search).get('grid')!=='0';
 const canvas=document.querySelector('#world'),gl=canvas.getContext('webgl',{antialias:true,alpha:false,powerPreference:'high-performance'});
 if(!gl){document.querySelector('#error').hidden=false;document.querySelector('#begin').disabled=true;throw Error('WebGL unavailable');}
 const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -1325,7 +1326,7 @@ function drawAutomap(){
 }
 if(GRID_MODE){
  document.body.classList.add('grid-mode');
- canvas.setAttribute('aria-label','凪の島（マス目移動）。W/Sで一マス前後、A/Dで横へ一マス、Q/Eまたは左右矢印で90度向きを変えます。画面下半分で上下に滑らせると前後、左右で向きを変えます。軽く触れると一マス進みます。');
+ canvas.setAttribute('aria-label',canvas.getAttribute('aria-label').split('。')[0]+'。マス目を一つずつ歩きます。W/Sで一マス前後、A/Dで横へ一マス、Q/Eまたは左右矢印で90度向きを変えます。画面下半分で上下に滑らせると前後、左右で向きを変えます。軽く触れると一マス進みます。');
  const notes=document.querySelector('.notes p');if(notes)notes.innerHTML='マス目をひとつずつ歩く試作版。画面の下半分で、上へ滑らせて前進、<br>下で後退、左右で90度の向き替え。軽く触れると一マス。PCは W A S D · Q E · ← →。';
  const book=document.querySelector('.book-controls');
  if(book)book.innerHTML='<h3>マス目を歩く</h3><p>画面の下半分で上へ滑らせると一マス前へ。<br>保持すると歩き続けます。下で後退、左右で90度の向き替え。<br>軽く触れると一マス進みます。</p><p class="keyboard-notes">PC：W / S で前後 ／ A / D で横へ一マス ／ Q E ・ ← → で向き替え<br>Shift で早足 ／ M で地図 ／ H でしおり ／ Esc で入力解除</p>';

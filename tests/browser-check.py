@@ -5,6 +5,8 @@ from playwright.sync_api import sync_playwright
 root=Path(__file__).resolve().parents[1]
 parser=argparse.ArgumentParser();parser.add_argument('--url');parser.add_argument('--smoke',action='store_true');parser.add_argument('--greeting-only',action='store_true');args=parser.parse_args()
 base=args.url or 'http://127.0.0.1:4173/'
+# Free walking is now the ?grid=0 comparison mode; the root forwards the query to dist/.
+free=base+('&' if '?' in base else '?')+'grid=0'
 if not args.url:
  server=subprocess.Popen(['python3','-m','http.server','4173','--bind','127.0.0.1','--directory',str(root)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
  atexit.register(server.terminate);time.sleep(.5)
@@ -21,7 +23,7 @@ audio_probe="""window._footBuffers=[];const AC=window.AudioContext||window.webki
 with sync_playwright() as p:
  browser=p.chromium.launch(executable_path=os.environ.get('CHROMIUM_PATH','/usr/bin/chromium'),headless=True,args=['--no-sandbox','--use-angle=swiftshader','--enable-unsafe-swiftshader'])
  if args.greeting_only:
-  page=browser.new_page(viewport={'width':1440,'height':900});page.goto(base,wait_until='networkidle');page.wait_for_function('!!window.nagi');page.locator('#begin').click();page.keyboard.down('w');page.wait_for_function('nagi.greeted > 0',timeout=45000);page.keyboard.up('w')
+  page=browser.new_page(viewport={'width':1440,'height':900});page.goto(free,wait_until='networkidle');page.wait_for_function('!!window.nagi');page.locator('#begin').click();page.keyboard.down('w');page.wait_for_function('nagi.greeted > 0',timeout=45000);page.keyboard.up('w')
   assert page.locator('#speaker').inner_text()=='浜のひと'
   assert 4.5<page.evaluate('nagi.greetingDistance')<=4.8;assert page.locator('#speaker').inner_text()=='浜のひと'
   page.wait_for_timeout(1500);page.screenshot(path=str(root/'greeting.png'))
@@ -30,7 +32,7 @@ with sync_playwright() as p:
  if args.smoke:
   context=browser.new_context(viewport={'width':390,'height':844},is_mobile=True,has_touch=True)
   live=context.new_page();live_errors=[];live.on('pageerror',lambda e:live_errors.append(str(e)))
-  response=live.goto(base,wait_until='networkidle',timeout=45000);assert response.ok
+  response=live.goto(free,wait_until='networkidle',timeout=45000);assert response.ok
   live.wait_for_function('window.nagi && nagi.release === "2026-10-18-movement-core"',timeout=30000)
   icon=live.locator('link[rel="icon"]').get_attribute('href');assert live.request.get(live.evaluate('(p)=>new URL(p,location.href).href',icon)).ok
   live.locator('#begin').tap();live.wait_for_function('getComputedStyle(document.querySelector("#arrival")).visibility === "hidden"')
@@ -48,7 +50,7 @@ with sync_playwright() as p:
  page.on('pageerror',lambda e:errors.append(str(e)))
  page.add_init_script(audio_probe)
  page.add_init_script("const setMatrix=WebGLRenderingContext.prototype.uniformMatrix4fv;WebGLRenderingContext.prototype.uniformMatrix4fv=function(l,t,v){window._nagiVP=Array.from(v);return setMatrix.call(this,l,t,v);};")
- page.goto(base,wait_until='networkidle');page.wait_for_function('!!window.nagi',timeout=30000)
+ page.goto(free,wait_until='networkidle');page.wait_for_function('!!window.nagi',timeout=30000)
  assert page.evaluate('!!window.nagi'),errors
 
  assert page.evaluate('nagi.release')=='2026-10-18-movement-core'
@@ -108,7 +110,7 @@ with sync_playwright() as p:
  # Real CDP touch events exercise pointer capture and cancellation on a mobile viewport.
  context=browser.new_context(viewport={'width':390,'height':844},device_scale_factor=1,is_mobile=True,has_touch=True)
  mobile=context.new_page();mobile.add_init_script("addEventListener('pointerdown',e=>window._lastMovementPointer=e.pointerId,true);");mobile.on('pageerror',lambda e:errors.append(str(e)))
- mobile.goto(base,wait_until='networkidle');mobile.wait_for_function('!!window.nagi',timeout=30000);mobile.screenshot(path=str(root/'mobile.png'))
+ mobile.goto(free,wait_until='networkidle');mobile.wait_for_function('!!window.nagi',timeout=30000);mobile.screenshot(path=str(root/'mobile.png'))
  cdp=context.new_cdp_session(mobile)
  title=mobile.locator('h1').bounding_box();x=title['x']+30;y=title['y']+30
  cdp.send('Input.dispatchTouchEvent',{'type':'touchStart','touchPoints':[{'x':x,'y':y,'id':1}]});mobile.wait_for_timeout(1200);cdp.send('Input.dispatchTouchEvent',{'type':'touchEnd','touchPoints':[]})

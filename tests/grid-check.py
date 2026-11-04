@@ -1,4 +1,4 @@
-"""Opt-in grid mode (?grid=1): one cell per step, quarter turns, automap, touch slides and the free-walk default."""
+"""Default grid mode (root entrance): one cell per step, quarter turns, automap, touch slides and the free-walk default."""
 import os,atexit,math,subprocess,time
 from pathlib import Path
 from playwright.sync_api import sync_playwright
@@ -23,15 +23,16 @@ def on_grid(p):
 with sync_playwright() as pw:
  browser=pw.chromium.launch(executable_path=os.environ.get('CHROMIUM_PATH','/usr/bin/chromium'),headless=True,args=['--no-sandbox','--use-angle=swiftshader','--enable-unsafe-swiftshader'])
  errors=[]
- # The default entrance keeps free walking and shows no grid interface.
+ # ?grid=0 keeps the earlier free walking and shows no grid interface.
  page=browser.new_page(viewport={'width':1280,'height':800});page.on('pageerror',lambda e:errors.append(str(e)))
- page.goto(base+'dist/index.html',wait_until='networkidle');page.wait_for_function('!!window.nagi',timeout=30000)
+ page.goto(base+'?grid=0',wait_until='networkidle');page.wait_for_function('!!window.nagi',timeout=30000)
+ assert page.url.endswith('dist/index.html?grid=0'),page.url
  assert page.evaluate('nagi.grid') is None
  page.locator('#begin').click();page.wait_for_timeout(300);assert not page.locator('#automap').is_visible()
  page.close()
 
  page=browser.new_page(viewport={'width':1280,'height':800});page.on('pageerror',lambda e:errors.append(str(e)))
- page.goto(base+'dist/index.html?grid=1',wait_until='networkidle');page.wait_for_function('!!window.nagi && !!nagi.grid',timeout=30000)
+ page.goto(base,wait_until='networkidle');page.wait_for_function('!!window.nagi && !!nagi.grid',timeout=30000)
  assert 'マス目' in page.locator('.notes p').inner_text()
  page.locator('#begin').click();page.wait_for_function("getComputedStyle(document.querySelector('#arrival')).visibility === 'hidden'",timeout=15000)
  start=page.evaluate('nagi.position');assert on_grid(start)==(0,0) and start['yaw']==0
@@ -72,7 +73,7 @@ with sync_playwright() as pw:
  # Touch: tap is one step, an upward slide repeats, a sideways slide turns, release stops, upper half is ignored.
  context=browser.new_context(viewport={'width':390,'height':844},is_mobile=True,has_touch=True)
  mobile=context.new_page();mobile.on('pageerror',lambda e:errors.append(str(e)))
- mobile.goto(base+'dist/index.html?grid=1',wait_until='networkidle');mobile.wait_for_function('!!window.nagi && !!nagi.grid',timeout=30000)
+ mobile.goto(base,wait_until='networkidle');mobile.wait_for_function('!!window.nagi && !!nagi.grid',timeout=30000)
  mobile.locator('#begin').tap();mobile.wait_for_function("getComputedStyle(document.querySelector('#arrival')).visibility === 'hidden'",timeout=15000)
  cdp=context.new_cdp_session(mobile)
  def touch(kind,x=0,y=0):
@@ -92,4 +93,4 @@ with sync_playwright() as pw:
  mobile.screenshot(path=str(root/'grid-mobile.png'))
  assert not errors,errors
  browser.close()
-print('grid mode: single-cell steps, held repeat, quarter turns, side-steps, shore bumps, automap, greetings and touch slides passed')
+print('default grid mode: single-cell steps, held repeat, quarter turns, side-steps, shore bumps, automap, greetings and touch slides passed')

@@ -43,7 +43,7 @@ test('future naming builds every artifact without changing routes, IDs, icons or
     assert(html.includes('aria-label="蒼ト凪ノ島ノ旅 &amp; &lt;潮&gt;。WASD'));
     assert(html.includes('class="folio">蒼ト凪ノ島ノ旅 &amp; &lt;潮&gt; ／'));
     assert(html.includes('name="nagi-release" content="2026-10-18-movement-core"'));
-   }else assert(html.includes('location.replace(new URL("./dist/index.html",document.baseURI).href)'));
+   }else assert(html.includes('location.replace(new URL("./dist/index.html"+location.search,document.baseURI).href)'));
   }
   for(const file of ['manifest.webmanifest','dist/manifest.webmanifest']){
    const expected=JSON.parse(before.get(file));expected.name='蒼ト凪ノ島ノ旅 & <潮>';expected.short_name=expected.name;

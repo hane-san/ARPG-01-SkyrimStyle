@@ -18,7 +18,7 @@ server = subprocess.Popen(
     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
 )
 atexit.register(server.terminate)
-base = 'http://127.0.0.1:4179/'
+base = 'http://127.0.0.1:4179/?grid=0'
 for _ in range(40):
     assert server.poll() is None, 'journey server exited: port 4179 may already be occupied'
     try:
