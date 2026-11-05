@@ -174,12 +174,12 @@ with sync_playwright() as pw:
  mobile.wait_for_function('nagi.grid.look<-.3',timeout=15000)
  assert grid('heading')==heading and grid('turns')==turns+2 and grid('holdClicks')==clicks+1
  touch('touchEnd');mobile.wait_for_function('Math.abs(nagi.grid.look)<.01',timeout=15000);assert grid('heading')==heading
- # Held press, then a long look: it stops at 120 degrees and only the eyes move; sliding up as well does not walk.
+ # Held press, then a long look: it eases into 45 degrees and only the eyes move; sliding up as well does not walk.
  turns,clicks,before=grid('turns'),grid('holdClicks'),actions()
  t=time.time();touch('touchStart',100,700,t);mobile.wait_for_function(f'nagi.grid.holdClicks>{clicks}',timeout=15000)
  touch('touchMove',100+30,702,t+.3);touch('touchMove',100+30+250,702,t+.4)
- mobile.wait_for_function('nagi.grid.look<-1.9',timeout=15000);mobile.wait_for_timeout(300)
- assert grid('look')>-2.1 and grid('heading')==heading and grid('turns')==turns and grid('holdClicks')==clicks+1
+ mobile.wait_for_function('nagi.grid.look<-.75',timeout=15000);mobile.wait_for_timeout(300)
+ assert grid('look')>-math.pi/4 and grid('heading')==heading and grid('turns')==turns and grid('holdClicks')==clicks+1
  touch('touchMove',100+30+250,620,t+.6);mobile.wait_for_timeout(1200)
  assert actions()==before and grid('heading')==heading
  touch('touchEnd');mobile.wait_for_function('Math.abs(nagi.grid.look)<.01',timeout=15000);settle(mobile);assert actions()==before

@@ -804,10 +804,10 @@ let lookYaw=0,activeCommand=null,bumpedCommand=null,bumpedAt=null;
 function gridUpdate(dt){
  // A still press arms the held mode: a soft click (and a tap of vibration where supported) says so.
  if(gridGesture.arm(performance.now()/1000))holdClick();
- // Looking around (D016): the view follows the finger, up to 120 degrees either way, and only the view: the heading
- // never changes by looking. Letting go settles the view gently back on the heading.
+ // Looking around (D016/D017): the view follows the finger, easing into 45 degrees either way, and only the view: the
+ // heading never changes by looking; a flick turns. Letting go settles the view gently back on the heading.
  const looking=gridGesture.command==='look';
- lookYaw+=(-gridGesture.look*Math.PI/2-lookYaw)*(1-Math.exp(-dt*(looking?20:6)));
+ lookYaw+=(-gridGesture.look*Math.PI/2-lookYaw)*(1-Math.exp(-dt*(looking?12:6)));
  // Settled means settled: the easing would otherwise creep toward zero forever.
  if(!looking&&Math.abs(lookYaw)<1e-4)lookYaw=0;
  const held=heldCommand();
@@ -1083,10 +1083,10 @@ function drawAutomap(){
 }
 if(GRID_MODE){
  document.body.classList.add('grid-mode');
- canvas.setAttribute('aria-label',canvas.getAttribute('aria-label').split('。')[0]+'。マス目を一つずつ歩きます。W/Sで一マス前後、A/Dで横へ一マス、Q/Eまたは左右矢印で90度向きを変え、Xで振り返ります。画面下半分では、はじくと上で一歩前へ（押したままで一歩ずつ進み続ける）、下で一歩後ろへ、左右で90度向きを変えます。少し押して音がしてから左右へ滑らせると、向きは変えずに見渡せます。カニ歩きは画面下の左右の隅にある薄いボタンで。軽く触れると一マス進みます。');
- const notes=document.querySelector('.notes p');if(notes)notes.innerHTML='マス目をひとつずつ歩く。下半分で<b>はじく</b>：上で一歩前へ（押したままで一歩ずつ進み続ける）、下で一歩後ろ、左右で向きを変える。<br><b>少し押して「カチッ」→ 左右へ滑らせる</b>と、向きは変えずに景色を見渡す。離すと正面へ。<br>カニ歩きは左右の隅の薄いボタン。軽く触れると一マス。PCは W A S D · Q E · ← → · X。';
+ canvas.setAttribute('aria-label',canvas.getAttribute('aria-label').split('。')[0]+'。マス目を一つずつ歩きます。W/Sで一マス前後、A/Dで横へ一マス、Q/Eまたは左右矢印で90度向きを変え、Xで振り返ります。画面下半分では、はじくと上で一歩前へ（押したままで一歩ずつ進み続ける）、下で一歩後ろへ、左右で90度向きを変えます。少し押して音がしてから左右へ滑らせると、左右45度ほどまで見渡せます（向きは変わりません）。カニ歩きは画面下の左右の隅にある薄いボタンで。軽く触れると一マス進みます。');
+ const notes=document.querySelector('.notes p');if(notes)notes.innerHTML='マス目をひとつずつ歩く。下半分で<b>はじく</b>：上で一歩前へ（押したままで一歩ずつ進み続ける）、下で一歩後ろ、左右で向きを変える。<br><b>少し押して「カチッ」→ 左右へ滑らせる</b>と、首を回すように景色を見渡す（左右45度ほどまで）。離すと正面へ。<br>カニ歩きは左右の隅の薄いボタン。軽く触れると一マス。PCは W A S D · Q E · ← → · X。';
  const book=document.querySelector('.book-controls');
- if(book)book.innerHTML='<h3>マス目を歩く</h3><p><b>はじく＝一歩・向き替え</b><br>上：一歩前へ（押したままで一歩ずつ進み続ける）／下：一歩後ろへ／左右：90度向きを変える<br><b>少し押して「カチッ」→ 左右へ滑らせる＝見渡す</b><br>視線だけが指についてきます（左右120度まで）。向きは変わらず、離すと正面に戻ります。<br><b>カニ歩き</b>：画面下の左右の隅にある薄いボタン。押すたび一マス、押したままで続けて。<br>軽く触れると一マス進みます。</p><p class="keyboard-notes">PC：W / S で前後 ／ A / D で横へ一マス ／ Q E ・ ← → で向き替え ／ X で振り返る<br>Shift で早足 ／ M で地図 ／ H でしおり ／ Esc で入力解除</p>';
+ if(book)book.innerHTML='<h3>マス目を歩く</h3><p><b>はじく＝一歩・向き替え</b><br>上：一歩前へ（押したままで一歩ずつ進み続ける）／下：一歩後ろへ／左右：90度向きを変える<br><b>少し押して「カチッ」→ 左右へ滑らせる＝見渡す</b><br>視線だけが指についてきて、左右45度ほどでやわらかく止まります（ふり向きはしません）。離すと正面に戻ります。<br><b>カニ歩き</b>：画面下の左右の隅にある薄いボタン。押すたび一マス、押したままで続けて。<br>軽く触れると一マス進みます。</p><p class="keyboard-notes">PC：W / S で前後 ／ A / D で横へ一マス ／ Q E ・ ← → で向き替え ／ X で振り返る<br>Shift で早足 ／ M で地図 ／ H でしおり ／ Esc で入力解除</p>';
 }
 // Side-step buttons (D016): pressing one is a step sideways; holding it walks on, one eased cell at a time. A press too
 // quick to act before release is queued, so it is never lost. They never take focus, so the walk is not interrupted.

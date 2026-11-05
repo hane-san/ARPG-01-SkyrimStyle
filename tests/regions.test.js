@@ -52,3 +52,19 @@ test('every piece is a complete, original arrangement: whole bars, its own melod
  assert.ok(trackEvents(TRACKS.terraces).events.some(e=>e.voice==='drum'));
  assert.equal(degreeToMidi(TRACKS.shore,7),TRACKS.shore.root+12);
 });
+
+test('the field music is fuller: every piece has an accompaniment, percussion, a moving bass and a second voice',()=>{
+ for(const [id,track] of Object.entries(TRACKS)){
+  const {events,length}=trackEvents(track),bars=track.chords.length;
+  const count=v=>events.filter(e=>e.voice===v).length;
+  // Broken chords on every beat or half beat, a kick in every bar and woodblock ticks between.
+  const arp=events.filter(e=>e.voice!==track.lead&&['pluck','glass','musicbox'].includes(e.voice)&&e.midi>=degreeToMidi(track,0,1)-12);
+  assert.ok(arp.length>=bars*track.meter,id);
+  assert.ok(count('drum')>=bars,id);assert.ok(count('tick')>=bars,id);
+  // The low end moves inside the bar (a second bass note, or the waltz's low plucks), and longer melody notes have a
+  // softer voice under them.
+  assert.ok(events.filter(e=>e.voice==='bass'||e.voice==='pluckLow').length>bars,id);
+  const harmony=events.filter(e=>e.voice===track.lead&&e.gain>0&&e.gain<1);assert.ok(harmony.length>=3,id);
+  for(const e of events){assert.ok(e.gain===undefined||(e.gain>0&&e.gain<=1),id);assert.ok(e.beat<length,id);}
+ }
+});

@@ -43,6 +43,9 @@ export const TRACKS=Object.freeze({
  shallows:{title:'空を映す浅瀬',bpm:56,meter:4,root:72,scale:'major',lead:'glass',bass:'long',pad:true,chords:[0,3,0,4,5,3,1,4],
   melody:'7:2 -:2 9:1 7:1 4:2 -:4 6:3 -:1 4:2 -:2 3:1 4:1 6:2 -:4 2:4'}
 });
+// The quieter places keep a gentler accompaniment: arps on a music box and ticks only on the beats.
+const CALM=new Set(['shallows','snowridge','waterside','meadow']);
+for(const [id,track] of Object.entries(TRACKS))Object.defineProperty(track,'id',{value:id});
 export function parseMelody(text){
  return text.trim().split(/\s+/).map(token=>{const [d,len]=token.split(':');return {degree:d==='-'?null:Number(d),beats:Number(len)};});
 }
@@ -54,18 +57,33 @@ export const midiToHz=m=>440*2**((m-69)/12);
 // Every note of one loop, in beats from the loop start. Pure data, so the arrangement can be tested without audio.
 export function trackEvents(track){
  const events=[],meter=track.meter,bars=track.chords.length,length=bars*meter;let beat=0;
- for(const note of parseMelody(track.melody)){if(note.degree!==null)events.push({beat,voice:track.lead,midi:degreeToMidi(track,note.degree),beats:note.beats});beat+=note.beats;}
+ for(const note of parseMelody(track.melody)){
+  if(note.degree!==null){
+   events.push({beat,voice:track.lead,midi:degreeToMidi(track,note.degree),beats:note.beats});
+   // A second voice a diatonic third below sings the longer notes with the melody.
+   if(note.beats>=1)events.push({beat,voice:track.lead,midi:degreeToMidi(track,note.degree-2),beats:note.beats,gain:.42});
+  }
+  beat+=note.beats;
+ }
  track.chords.forEach((chord,bar)=>{
   const start=bar*meter,tones=[0,2,4].map(k=>degreeToMidi(track,chord+k,-1));
   if(track.pad)for(const midi of tones)events.push({beat:start,voice:'pad',midi,beats:meter});
   const root=degreeToMidi(track,chord,-2),fifth=degreeToMidi(track,chord+4,-2);
-  if(track.bass==='long')events.push({beat:start,voice:'bass',midi:root,beats:meter});
+  // A long bass moves once inside the bar (root, then fifth), so even the calm pieces keep walking.
+  if(track.bass==='long'){const half=meter%2?meter:meter/2;events.push({beat:start,voice:'bass',midi:root,beats:half});if(half<meter)events.push({beat:start+half,voice:'bass',midi:fifth,beats:meter-half});}
   else if(track.bass==='waltz'){events.push({beat:start,voice:'bass',midi:root,beats:1});for(let b=1;b<meter;b++)events.push({beat:start+b,voice:'pluckLow',midi:tones[b%3]+12,beats:.8});}
   else if(track.bass==='sway'){events.push({beat:start,voice:'bass',midi:root,beats:3},{beat:start+3,voice:'bass',midi:fifth,beats:3});}
   else if(track.bass==='pulse')for(let b=0;b<meter*2;b++)events.push({beat:start+b/2,voice:'bass',midi:b%4===3?fifth:root,beats:.45});
   else if(track.bass==='walk')for(let b=0;b<meter;b++)events.push({beat:start+b,voice:'bass',midi:degreeToMidi(track,chord+[0,2,4,5][b%4],-2),beats:.9});
-  if(track.arp)for(let b=0;b<meter*2;b++)events.push({beat:start+b/2,voice:track.arp,midi:tones[[0,1,2,1][b%4]]+24,beats:.5});
+  // The field arrangement (fuller since D017): every piece has a broken-chord accompaniment and light percussion.
+  // Pieces that name their own arp or drums keep them; the others get one matched to their tempo and calm.
+  const calm=CALM.has(track.id||'')||track.bpm<72,perBeat=track.bpm>=150?1:2,arp=track.arp||(calm?'musicbox':track.lead==='pluck'?'glass':'pluck');
+  for(let b=0;b<meter*perBeat;b++)events.push({beat:start+b/perBeat,voice:arp,midi:tones[[0,1,2,1][b%4]]+24,beats:1/perBeat,gain:track.arp?1:.75});
   if(track.drums){const steps=track.drums.length;for(let s=0;s<steps;s++)if(track.drums[s]==='x')events.push({beat:start+s*meter/steps,voice:'drum',midi:0,beats:.25});}
+  else for(const b of meter===6?[0,3]:[0])events.push({beat:start+b,voice:'drum',midi:0,beats:.25,gain:calm?.6:.9});
+  // A woodblock tick between the kicks keeps time: on the beats for calm pieces, on every half beat for the rest.
+  const ticks=calm||perBeat===1?meter:meter*2;
+  for(let k=0;k<ticks;k++){const beat=k*meter/ticks;if(beat%(meter===6?3:meter)===0)continue;events.push({beat:start+beat,voice:'tick',midi:96,beats:.1,gain:(k%2?.7:1)*(calm?.6:1)});}
   if(track.bell&&bar%2===0)events.push({beat:start,voice:'bell',midi:degreeToMidi(track,chord,-2),beats:meter*2});
  });
  events.sort((a,b)=>a.beat-b.beat);
@@ -73,9 +91,9 @@ export function trackEvents(track){
 }
 
 // Instruments: a few oscillators with envelopes. Each note disconnects itself when it ends.
-const VOICE_LEVEL={keys:.05,musicbox:.045,glass:.035,flute:.04,pluck:.05,pluckLow:.025,pad:.014,bass:.045,drum:.07,bell:.06};
-function playVoice(ctx,out,voice,midi,time,seconds){
- const level=VOICE_LEVEL[voice]||.04,f=midiToHz(midi),nodes=[],oscillators=[];
+const VOICE_LEVEL={keys:.05,musicbox:.04,glass:.034,flute:.045,pluck:.042,pluckLow:.025,pad:.016,bass:.05,drum:.08,tick:.03,bell:.06};
+function playVoice(ctx,out,voice,midi,time,seconds,gain=1){
+ const level=(VOICE_LEVEL[voice]||.04)*gain,f=midiToHz(midi),nodes=[],oscillators=[];
  const env=ctx.createGain();env.connect(out);nodes.push(env);
  const tone=(type,freq,gain=1,into=env)=>{const o=ctx.createOscillator(),g=ctx.createGain();o.type=type;o.frequency.setValueAtTime(freq,time);g.gain.value=gain;o.connect(g);g.connect(into);nodes.push(o,g);oscillators.push(o);return o;};
  let end;
@@ -89,6 +107,10 @@ function playVoice(ctx,out,voice,midi,time,seconds){
   const o=tone('triangle',f),lfo=ctx.createOscillator(),depth=ctx.createGain();lfo.frequency.value=5.2;depth.gain.value=f*.006;lfo.connect(depth);depth.connect(o.frequency);nodes.push(lfo,depth);oscillators.push(lfo);
   tone('sine',f*2,.12);
   env.gain.setValueAtTime(0,time);env.gain.linearRampToValueAtTime(level,time+.07);env.gain.setValueAtTime(level,time+Math.max(.08,seconds-.08));env.gain.linearRampToValueAtTime(0,time+seconds+.12);end=time+seconds+.15;
+ }else if(voice==='tick'){
+  // A small woodblock: a high sine that drops a little and dies within a tenth of a second.
+  const o=tone('sine',f*.9);o.frequency.exponentialRampToValueAtTime(f*.6,time+.03);tone('sine',f*1.51,.35);
+  env.gain.setValueAtTime(0,time);env.gain.linearRampToValueAtTime(level,time+.002);env.gain.exponentialRampToValueAtTime(.0001,time+.09);end=time+.1;
  }else if(voice==='drum'){
   const o=tone('sine',150);o.frequency.exponentialRampToValueAtTime(58,time+.14);
   env.gain.setValueAtTime(0,time);env.gain.linearRampToValueAtTime(level,time+.004);env.gain.exponentialRampToValueAtTime(.0001,time+.24);end=time+.26;
@@ -109,7 +131,13 @@ function playVoice(ctx,out,voice,midi,time,seconds){
 // game loop, so nothing runs while the page is paused, hidden or muted (the context is suspended then).
 export const CROSSFADE_SECONDS=1.6,LOOKAHEAD_SECONDS=.35;
 export class RegionMusic {
- constructor(ctx,destination,{level=.55}={}){this.ctx=ctx;this.bus=ctx.createGain();this.bus.gain.value=level;this.bus.connect(destination);this.playing=null;this.fading=[];this.cache=new Map();}
+ constructor(ctx,destination,{level=1}={}){
+  this.ctx=ctx;this.bus=ctx.createGain();this.bus.gain.value=level;this.bus.connect(destination);this.playing=null;this.fading=[];this.cache=new Map();
+  // A soft echo gives the field music some space: a darkened feedback delay mixed in under the dry sound.
+  const delay=ctx.createDelay(1),feedback=ctx.createGain(),tone=ctx.createBiquadFilter(),wet=ctx.createGain();
+  delay.delayTime.value=.34;feedback.gain.value=.3;tone.type='lowpass';tone.frequency.value=2200;wet.gain.value=.24;
+  this.bus.connect(delay);delay.connect(tone);tone.connect(feedback);feedback.connect(delay);tone.connect(wet);wet.connect(destination);
+ }
  get trackId(){return this.playing?.id||null;}
  play(id){
   if(!TRACKS[id]||this.playing?.id===id)return false;
@@ -131,7 +159,7 @@ export class RegionMusic {
    const e=events[t.index],time=t.start+(t.loop*length+e.beat)*t.beatSeconds;
    // A note that should have started more than a moment ago (after a suspend) is skipped, never piled up.
    if(time>until)break;
-   if(time>this.ctx.currentTime-.05)playVoice(this.ctx,t.gain,e.voice,e.midi,Math.max(time,this.ctx.currentTime),e.beats*t.beatSeconds);
+   if(time>this.ctx.currentTime-.05)playVoice(this.ctx,t.gain,e.voice,e.midi,Math.max(time,this.ctx.currentTime),e.beats*t.beatSeconds,e.gain);
    t.index++;if(t.index>=events.length){t.index=0;t.loop++;}
   }
  }
