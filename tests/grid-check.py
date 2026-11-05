@@ -187,9 +187,11 @@ with sync_playwright() as pw:
  t=time.time();touch('touchStart',195,700,t);mobile.wait_for_function(f'nagi.grid.holdClicks>{clicks}',timeout=15000);touch('touchMove',195,640,t+.3)
  mobile.wait_for_function(f'nagi.grid.steps+nagi.grid.bumps>{before}',timeout=15000);touch('touchEnd');settle(mobile)
  assert actions()>before and grid('heading')==heading
- # A quick tap never clicks.
- clicks=grid('holdClicks');t=time.time();touch('touchStart',195,700,t);touch('touchEnd',at=t+.06);settle(mobile)
- assert grid('holdClicks')==clicks
+ # A quick tap is judged on its own event times: it steps once and never looks, turns or strolls, even when a slow
+ # software-rendered frame lets the wall-clock click sound before the release arrives (the click is only a cue).
+ heading,turns,before=grid('heading'),grid('turns'),actions()
+ t=time.time();touch('touchStart',195,700,t);touch('touchEnd',at=t+.06);settle(mobile)
+ assert actions()==before+1 and grid('heading')==heading and grid('turns')==turns and abs(grid('look'))<.01
  box=mobile.locator('#automap').bounding_box();assert box and box['y']+box['height']<844/2,box
  # The greeting sits clear of the larger map.
  mobile.evaluate("document.querySelector('#greeting').setAttribute('aria-hidden','false')")
