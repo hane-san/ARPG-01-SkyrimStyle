@@ -158,21 +158,24 @@ with sync_playwright() as pw:
  turns=mobile.evaluate('nagi.grid.turns')
  t=time.time();touch('touchStart',195,700,t);touch('touchMove',260,705,t+.08);mobile.wait_for_function(f'nagi.grid.turns>{turns}',timeout=15000);touch('touchEnd');settle(mobile)
  assert actions()==done
- # Long press, then slide sideways: side-steps with the heading unchanged.
- heading=mobile.evaluate('nagi.grid.heading');turns=mobile.evaluate('nagi.grid.turns')
- t=time.time();touch('touchStart',195,700,t);mobile.wait_for_timeout(300);touch('touchMove',270,702,t+.25)
+ # Held press: it clicks once when it arms; then a sideways slide side-steps one cell at a time, facing unchanged.
+ heading=mobile.evaluate('nagi.grid.heading');turns=mobile.evaluate('nagi.grid.turns');clicks=mobile.evaluate('nagi.grid.holdClicks')
+ t=time.time();touch('touchStart',195,700,t);mobile.wait_for_function(f'nagi.grid.holdClicks>{clicks}',timeout=15000);touch('touchMove',270,702,t+.3)
  mobile.wait_for_function(f'nagi.grid.steps+nagi.grid.bumps>={done+1}',timeout=15000);mobile.wait_for_timeout(800);touch('touchEnd');settle(mobile)
- assert mobile.evaluate('nagi.grid.turns')==turns and mobile.evaluate('nagi.grid.heading')==heading
- # A quick downward flick steps back once, still facing the same way; holding on does not repeat it.
- heading=mobile.evaluate('nagi.grid.heading');before=actions()
- t=time.time();touch('touchStart',195,640,t);touch('touchMove',195,700,t+.08);mobile.wait_for_function(f'nagi.grid.steps+nagi.grid.bumps>{before}',timeout=15000)
- mobile.wait_for_timeout(1200);touch('touchEnd');settle(mobile)
- assert actions()==before+1 and mobile.evaluate('nagi.grid.heading')==heading
- # Long press, then slide down: an about-face (once), no step.
+ assert mobile.evaluate('nagi.grid.turns')==turns and mobile.evaluate('nagi.grid.heading')==heading and mobile.evaluate('nagi.grid.holdClicks')==clicks+1
+ # A quick downward flick turns right round, once, without a step.
  turns=mobile.evaluate('nagi.grid.turns');before=actions()
- t=time.time();touch('touchStart',195,640,t);mobile.wait_for_timeout(300);touch('touchMove',195,700,t+.3)
+ t=time.time();touch('touchStart',195,640,t);touch('touchMove',195,700,t+.08)
  mobile.wait_for_function(f'nagi.grid.turns>{turns}',timeout=15000);mobile.wait_for_timeout(1500);touch('touchEnd');settle(mobile)
  assert mobile.evaluate('nagi.grid.heading')==(heading+2)%4 and mobile.evaluate('nagi.grid.turns')==turns+1 and actions()==before
+ # Held press then slide down: steps back, still facing the same way.
+ heading=mobile.evaluate('nagi.grid.heading');before=actions();clicks=mobile.evaluate('nagi.grid.holdClicks')
+ t=time.time();touch('touchStart',195,640,t);mobile.wait_for_function(f'nagi.grid.holdClicks>{clicks}',timeout=15000);touch('touchMove',195,700,t+.3)
+ mobile.wait_for_function(f'nagi.grid.steps+nagi.grid.bumps>{before}',timeout=15000);touch('touchEnd');settle(mobile)
+ assert actions()>before and mobile.evaluate('nagi.grid.heading')==heading
+ # A quick tap never clicks.
+ clicks=mobile.evaluate('nagi.grid.holdClicks');t=time.time();touch('touchStart',195,700,t);touch('touchEnd',at=t+.06);settle(mobile)
+ assert mobile.evaluate('nagi.grid.holdClicks')==clicks
  box=mobile.locator('#automap').bounding_box();assert box and box['y']+box['height']<844/2,box
  # The greeting sits clear of the larger map.
  mobile.evaluate("document.querySelector('#greeting').setAttribute('aria-hidden','false')")
@@ -182,4 +185,4 @@ with sync_playwright() as pw:
  mobile.screenshot(path=str(root/'grid-mobile.png'))
  assert not errors,errors
  browser.close()
-print('default grid mode: regional music and sky, grid layout, single and gliding steps, quarter turns, crab walk, back flick, about-face, shore bumps, automap and touch passed')
+print('default grid mode: regional music and sky, grid layout, single and gliding steps, quarter turns, crab walk, hold click, careful steps, about-face flick, shore bumps, automap and touch passed')
