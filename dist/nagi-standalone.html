@@ -1568,7 +1568,8 @@ const camera={x:player.x,y:player.y,z:player.z,yaw:player.yaw};
 let previous={...camera},accumulator=0;
 function resetCameraHistory(){Object.assign(camera,{x:player.x,y:player.y,z:player.z,yaw:player.yaw});Object.assign(previous,camera);accumulator=0;}
 
-let gridGesture=new GridGesture(),pendingCommand=null,keyOrder=[],automapKey=null,automapShown=true;
+// Fresh presses and taps queue up (at most three) so quick presses are never lost, even mid-step or on a busy frame.
+let gridGesture=new GridGesture(),pendingCommands=[],keyOrder=[],automapKey=null,automapShown=true;
 let started=false,paused=false,muted=false,contextLost=false,time=0,last=performance.now(),gestures=new GestureInput(),keys=new Set(),shownPlaces=new Set(),lastGreetingDistance=null;
 const notices=new JourneyNotices(),seenScenes=new Set(),sceneDwell=new Map();
 const placeNode=document.querySelector('#place'),greetingNode=document.querySelector('#greeting'),travelBook=document.querySelector('#travel-book');
@@ -1650,9 +1651,9 @@ function gridUpdate(dt){
  if(held!==activeCommand)walker.easeOut();
  walker.update(dt);
  if(!walker.action){
-  const fresh=pendingCommand,command=fresh||held;
+  const fresh=pendingCommands[0]||null,command=fresh||held;
   // A fresh press that arrives during the short pause after a turn waits for it, rather than being dropped.
-  if(!(command&&TURN_COMMANDS.has(command)&&walker.cooldown>0)){pendingCommand=null;activeCommand=command;}
+  if(!(command&&TURN_COMMANDS.has(command)&&walker.cooldown>0)){if(fresh)pendingCommands.shift();activeCommand=command;}
   // Holding against a wall bumps once, not over and over: a repeated nudge reads as camera shake.
   // A fresh press, a turn or a new direction may bump again.
   const where=walker.i+','+walker.j+','+walker.heading;
@@ -1724,7 +1725,7 @@ function frame(now){
 }requestAnimationFrame(frame);
 
 // Grid mode: input is cleared, and a step already under way lands on its cell (at most 0.21 s); nothing repeats.
-function stopMovement(){if(GRID_MODE){pendingCommand=null;keyOrder=[];return;}resetMotion(player);resetCameraHistory();footDistance=0;feetMoving=false;}
+function stopMovement(){if(GRID_MODE){pendingCommands=[];keyOrder=[];return;}resetMotion(player);resetCameraHistory();footDistance=0;feetMoving=false;}
 function settleInput(){
  if(GRID_MODE)return;
  const i=readMovementInput(gestures.held?gestures.value:null,keys);
@@ -1749,7 +1750,7 @@ canvas.addEventListener('pointermove',e=>{
  if(gestures.move(e))e.preventDefault();else if(wasHeld&&!gestures.held)settleInput();
 });
 function finishPointer(e){
- if(GRID_MODE){const owner=gridGesture.id,result=gridGesture.end(e,e.timeStamp/1000);if(result){if(result==='tap'&&started&&!paused)pendingCommand='forward';releaseCapture(owner);}return;}
+ if(GRID_MODE){const owner=gridGesture.id,result=gridGesture.end(e,e.timeStamp/1000);if(result){if(result==='tap'&&started&&!paused&&pendingCommands.length<3)pendingCommands.push('forward');releaseCapture(owner);}return;}
  const owner=gestures.id;if(gestures.end(e)){settleInput();releaseCapture(owner);}
 }
 // Capture-phase window listeners also see releases outside the canvas after capture was lost.
@@ -1766,7 +1767,7 @@ addEventListener('keydown',e=>{
   // A physically held key can keep repeating after a dialog or blur cleared it.
   // Only a fresh press may start movement again.
   if(e.repeat&&!keys.has(e.code))return;
-  if(GRID_MODE&&!e.repeat){const command=keyCommand(e.code);if(command){pendingCommand=command;keyOrder=keyOrder.filter(k=>k!==e.code).concat(e.code);}}
+  if(GRID_MODE&&!e.repeat){const command=keyCommand(e.code);if(command){if(pendingCommands.length<3)pendingCommands.push(command);keyOrder=keyOrder.filter(k=>k!==e.code).concat(e.code);}}
   keys.add(e.code);resumeAudio();
  }
  if(GRID_MODE&&started&&!paused&&e.code==='KeyM'&&!e.repeat){automapShown=!automapShown;automapKey=null;drawAutomap();}
