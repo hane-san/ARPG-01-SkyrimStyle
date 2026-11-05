@@ -3,7 +3,7 @@ const {CRUISE_SPEED,footStride,nearPlaneMargin,CollisionWorld,circleCollider,box
 const {journeyScenes,landscapeColor,readingSeconds,JourneyNotices}=await import('./journey.js'+new URL(import.meta.url).search);
 const {REGIONS,SHORE_REGION,RegionTracker}=await import('./regions.js'+new URL(import.meta.url).search);
 const {RegionMusic}=await import('./music.js'+new URL(import.meta.url).search);
-const {ONE_SHOT,TURN_COMMANDS,CELL,GRID_ORIGIN,STEP_SECONDS,QUICK_STEP_SECONDS,HEADING_NAMES,GridWalker,GridGesture,keyCommand,automapCells,gridRoute,gridCells}=await import('./grid.js'+new URL(import.meta.url).search);
+const {ONE_SHOT,TURN_COMMANDS,GRID_CLEARANCE,CELL,GRID_ORIGIN,STEP_SECONDS,QUICK_STEP_SECONDS,HEADING_NAMES,GridWalker,GridGesture,keyCommand,automapCells,gridRoute,gridCells}=await import('./grid.js'+new URL(import.meta.url).search);
 // Dungeon-crawler travel is the default (producer decision 2026-11-04): the same island, one grid cell at a time.
 // ?grid=0 keeps the earlier free walking for comparison and its regression checks.
 const GRID_MODE=new URLSearchParams(location.search).get('grid')!=='0';
@@ -724,7 +724,7 @@ const RUN_SPEED=CRUISE_SPEED,GREETING_RADIUS=4.8;
 const collisionWorld=new CollisionWorld(obstacles,{height,walkable});
 const player=createMotionState(8,30,.25);player.y=height(8,30)+1.65;
 // Grid cells are 3 m, centred on the landing; the walker faces north up the island.
-const walker=GRID_MODE?new GridWalker(collisionWorld,{origin:GRID_ORIGIN,cell:CELL,heading:0}):null;
+const walker=GRID_MODE?new GridWalker(collisionWorld,{origin:GRID_ORIGIN,cell:CELL,heading:0,clearance:GRID_CLEARANCE,exempt:(i,j)=>roadCells.has(i+','+j)}):null;
 if(walker){player.yaw=walker.yaw;player.y=walker.y;}
 const camera={x:player.x,y:player.y,z:player.z,yaw:player.yaw};
 let previous={...camera},accumulator=0;
@@ -826,7 +826,9 @@ function gridUpdate(dt){
    // so holding on walks cell by cell rather than gliding. Flicked turns and steps back act once per slide.
    const fromGesture=!fresh&&gridGesture.held&&command===gridGesture.available(),fromSide=!fresh&&!fromGesture&&sideHeld===command;
    const slow=(fromGesture||fromSide)&&!TURN_COMMANDS.has(command);
-   const result=walker.command(command,{quick:keys.has('ShiftLeft')||keys.has('ShiftRight'),slow,hold:command===held&&!slow&&!(fromGesture&&ONE_SHOT.has(command))});
+   // A turn starts from where the glance already is, and the glance hands over to it, so the view never jumps.
+   const result=walker.command(command,{quick:keys.has('ShiftLeft')||keys.has('ShiftRight'),slow,look:TURN_COMMANDS.has(command)?lookYaw:0,hold:command===held&&!slow&&!(fromGesture&&ONE_SHOT.has(command))});
+   if(result==='turn')lookYaw=0;
    if(result&&!fresh&&gridGesture.held)gridGesture.take(command);
    if(result&&fromSide)sideActed=true;
    if(result==='step'){const [x,z]=walker.center(walker.i,walker.j);footstep(surfaceAt(x,z),CELL/STEP_SECONDS);}
@@ -1083,10 +1085,10 @@ function drawAutomap(){
 }
 if(GRID_MODE){
  document.body.classList.add('grid-mode');
- canvas.setAttribute('aria-label',canvas.getAttribute('aria-label').split('。')[0]+'。マス目を一つずつ歩きます。W/Sで一マス前後、A/Dで横へ一マス、Q/Eまたは左右矢印で90度向きを変え、Xで振り返ります。画面下半分では、はじくと上で一歩前へ（押したままで一歩ずつ進み続ける）、下で一歩後ろへ、左右で90度向きを変えます。少し押して音がしてから左右へ滑らせると、左右45度ほどまで見渡せます（向きは変わりません）。カニ歩きは画面下の左右の隅にある薄いボタンで。軽く触れると一マス進みます。');
- const notes=document.querySelector('.notes p');if(notes)notes.innerHTML='マス目をひとつずつ歩く。下半分で<b>はじく</b>：上で一歩前へ（押したままで一歩ずつ進み続ける）、下で一歩後ろ、左右で向きを変える。<br><b>少し押して「カチッ」→ 左右へ滑らせる</b>と、首を回すように景色を見渡す（左右45度ほどまで）。離すと正面へ。<br>カニ歩きは左右の隅の薄いボタン。軽く触れると一マス。PCは W A S D · Q E · ← → · X。';
+ canvas.setAttribute('aria-label',canvas.getAttribute('aria-label').split('。')[0]+'。マス目を一つずつ歩きます。W/Sで一マス前後、A/Dで横へ一マス、Q/Eまたは左右矢印で90度向きを変え、Xで振り返ります。画面下半分では、上へはじくと一歩前へ（押したままで一歩ずつ進み続ける）、下へはじくと一歩後ろへ。指を置いたまま左右へ滑らせている間は見渡すだけで（左右45度ほどまで）、向きは変わりません。左右へさっとはじいて離したときだけ、90度向きを変えます。カニ歩きは画面下の左右の隅にある薄いボタンで。軽く触れると一マス進みます。');
+ const notes=document.querySelector('.notes p');if(notes)notes.innerHTML='マス目をひとつずつ歩く。下半分で<b>上へはじく</b>と一歩前へ（押したままで一歩ずつ進み続ける）、<b>下へ</b>で一歩後ろ。<br><b>指を置いたまま左右へ</b>＝見渡すだけ（左右45度ほどまで、離すと正面へ）。<b>左右へさっとはじいて離す</b>＝向きを変える。<br>カニ歩きは左右の隅の薄いボタン。軽く触れると一マス。PCは W A S D · Q E · ← → · X。';
  const book=document.querySelector('.book-controls');
- if(book)book.innerHTML='<h3>マス目を歩く</h3><p><b>はじく＝一歩・向き替え</b><br>上：一歩前へ（押したままで一歩ずつ進み続ける）／下：一歩後ろへ／左右：90度向きを変える<br><b>少し押して「カチッ」→ 左右へ滑らせる＝見渡す</b><br>視線だけが指についてきて、左右45度ほどでやわらかく止まります（ふり向きはしません）。離すと正面に戻ります。<br><b>カニ歩き</b>：画面下の左右の隅にある薄いボタン。押すたび一マス、押したままで続けて。<br>軽く触れると一マス進みます。</p><p class="keyboard-notes">PC：W / S で前後 ／ A / D で横へ一マス ／ Q E ・ ← → で向き替え ／ X で振り返る<br>Shift で早足 ／ M で地図 ／ H でしおり ／ Esc で入力解除</p>';
+ if(book)book.innerHTML='<h3>マス目を歩く</h3><p><b>上へはじく</b>：一歩前へ（押したままで一歩ずつ進み続ける）<br><b>下へはじく</b>：一歩後ろへ<br><b>指を置いたまま左右へ＝見渡す</b><br>指を離さない限りは見渡すだけ。視線が指についてきて、左右45度ほどでやわらかく止まります。離すと正面に戻ります。<br><b>左右へさっとはじいて離す＝向きを変える</b><br>離した瞬間に90度向きを変えます（少し押して「カチッ」としてからなら、向きは変わりません）。<br><b>カニ歩き</b>：画面下の左右の隅にある薄いボタン。押すたび一マス、押したままで続けて。<br>軽く触れると一マス進みます。</p><p class="keyboard-notes">PC：W / S で前後 ／ A / D で横へ一マス ／ Q E ・ ← → で向き替え ／ X で振り返る<br>Shift で早足 ／ M で地図 ／ H でしおり ／ Esc で入力解除</p>';
 }
 // Side-step buttons (D016): pressing one is a step sideways; holding it walks on, one eased cell at a time. A press too
 // quick to act before release is queued, so it is never lost. They never take focus, so the walk is not interrupted.

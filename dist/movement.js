@@ -116,6 +116,8 @@ export class CollisionWorld {
   return this.candidates;
  }
  clearance(x,z){let d=Infinity;for(const o of this.obstacles)d=Math.min(d,signedDistance(o,x,z)-this.radius);return d;}
+ // The same clearance, looking only at obstacles within `limit` of the point (Infinity when there are none).
+ clearanceNear(x,z,limit){let d=Infinity;for(const id of this.query(x-limit,z-limit,2*limit,2*limit)){const o=this.obstacles[id];d=Math.min(d,signedDistance(o,x,z)-this.radius);}return d;}
  shoreHit(x,z,dx,dz){
   const steps=Math.max(1,Math.ceil(Math.hypot(dx,dz)/.18));
   for(let i=1;i<=steps;i++)if(!this.walkable(x+dx*i/steps,z+dz*i/steps)){

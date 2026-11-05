@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {height,walkable,landmarks} from '../dist/terrain.js';
 import {CollisionWorld,circleCollider} from '../dist/movement.js';
 import {routes} from '../dist/terrain.js';
-import {LOOK_LIMIT_QUARTERS,LOOK_PIXELS_PER_QUARTER,SIDE_STEP_SECONDS,STROLL_STEP_SECONDS,ONE_SHOT,TURN_AROUND_SECONDS,CELL,GRID_ORIGIN,STEP_SECONDS,TURN_SECONDS,HOLD_SECONDS,HEADINGS,headingYaw,nearestHeading,hermite,GridWalker,GridGesture,keyCommand,swipeCommand,automapCells,gridCells,gridRoute} from '../dist/grid.js';
+import {GRID_CLEARANCE,EYE_HEIGHT,FLICK_SECONDS,flickTurn,LOOK_LIMIT_QUARTERS,LOOK_PIXELS_PER_QUARTER,SIDE_STEP_SECONDS,STROLL_STEP_SECONDS,ONE_SHOT,TURN_AROUND_SECONDS,CELL,GRID_ORIGIN,STEP_SECONDS,TURN_SECONDS,HOLD_SECONDS,HEADINGS,headingYaw,nearestHeading,hermite,GridWalker,GridGesture,keyCommand,swipeCommand,automapCells,gridCells,gridRoute} from '../dist/grid.js';
 
 const flat=(obstacles=[],dry=()=>true)=>new CollisionWorld(obstacles,{height:()=>1,walkable:dry});
 const run=(w,seconds)=>{for(let t=0;t<seconds;t+=1/60)w.update(1/60);};
@@ -60,8 +60,11 @@ test('keys and slides map to the same six commands',()=>{
  assert.equal(keyCommand('KeyW'),'forward');assert.equal(keyCommand('ArrowDown'),'back');assert.equal(keyCommand('KeyA'),'strafeLeft');
  assert.equal(keyCommand('KeyE'),'turnRight');assert.equal(keyCommand('ArrowLeft'),'turnLeft');assert.equal(keyCommand('ShiftLeft'),null);
  assert.equal(swipeCommand(0,-10),null);assert.equal(swipeCommand(4,-40),'forward');assert.equal(swipeCommand(-3,40),'back');assert.equal(swipeCommand(-3,40,true),'back');assert.equal(swipeCommand(-40,10,true),'look');assert.equal(swipeCommand(4,-40,true),'forward');
- // D016: a sideways flick turns; side-steps are the corner buttons, not a gesture.
- assert.equal(swipeCommand(-40,10),'turnLeft');assert.equal(swipeCommand(40,-10),'turnRight');
+ // D018: while the finger is down, sideways only looks; a quick sideways flick turns when it lifts. Side-steps are the
+ // corner buttons, not a gesture.
+ assert.equal(swipeCommand(-40,10),'look');assert.equal(swipeCommand(40,-10),'look');
+ assert.equal(flickTurn(-40,10,.2),'turnLeft');assert.equal(flickTurn(40,-10,.2),'turnRight');
+ assert.equal(flickTurn(40,0,FLICK_SECONDS+.01),null);assert.equal(flickTurn(40,0,.2,true),null);assert.equal(flickTurn(15,0,.1),null);assert.equal(flickTurn(30,40,.1),null);
 });
 
 test('gesture: lower half only, tap is one step, multitouch and release clear input',()=>{
@@ -69,9 +72,13 @@ test('gesture: lower half only, tap is one step, multitouch and release clear in
  assert.equal(g.begin(touch(1,100,200),b,0),false);g.end(touch(1,100,200),0);
  assert.equal(g.begin(touch(2,100,600),b,0),true);assert.equal(g.end(touch(2,101,601),.1),'tap');
  assert.equal(g.begin(touch(3,100,600),b,0),true);g.move(touch(3,100,560),.05);assert.equal(g.command,'forward');
- g.move(touch(3,160,565),.1);assert.equal(g.command,'turnRight');
- // A flick that ends before it could act is handed back, so the page queues it rather than losing it.
- assert.equal(g.end(touch(3,140,560),1),'turnRight');assert.equal(g.held,false);assert.equal(g.command,null);
+ g.move(touch(3,160,565),.1);assert.equal(g.command,'look');
+ // A slow release after a look is just the end of a glance.
+ assert.equal(g.end(touch(3,140,560),1),true);assert.equal(g.held,false);assert.equal(g.command,null);
+ // A quick sideways flick is handed back on release as a turn, so the page queues it.
+ g.begin(touch(32,100,600),b,0);g.move(touch(32,160,602),.08);assert.equal(g.available(),null);assert.equal(g.end(touch(32,170,602),.15),'turnRight');
+ // A flick up that ends before it could act is handed back too, rather than lost.
+ g.begin(touch(33,100,600),b,0);g.move(touch(33,100,540),.05);assert.equal(g.end(touch(33,100,540),.1),'forward');
  g.begin(touch(31,100,600),b,0);g.move(touch(31,100,540),.05);g.take('forward');assert.equal(g.end(touch(31,100,540),.3),true);
  assert.equal(g.begin(touch(4,100,600),b,0),true);g.move(touch(4,100,550),.05);
  assert.equal(g.begin(touch(5,200,600,{isPrimary:false}),b,0),false);assert.equal(g.held,false);assert.equal(g.command,null);
@@ -107,13 +114,19 @@ test('a held walk glides between cells at constant speed and eases out on releas
  assert.equal(back,false);assert.equal(r.z,-CELL);
 });
 
-test('a flick turns or steps once; a held sideways slide only glances, easing into 45 degrees, and never turns',()=>{
+test('while the finger is down sideways only glances (easing into 45 degrees); only a quick flick turns, on release',()=>{
  const g=new GridGesture(),b={top:0,height:800},touch=(id,x,y)=>({pointerId:id,pointerType:'touch',clientX:x,clientY:y,button:0,buttons:1,isPrimary:true});
  assert.ok(ONE_SHOT.has('turnLeft')&&ONE_SHOT.has('turnRight')&&ONE_SHOT.has('back')&&!ONE_SHOT.has('forward'));
- // Flicks: sideways turns a quarter, once per slide however long the finger stays down.
- g.begin(touch(1,200,600),b,0);g.move(touch(1,250,600),.08);assert.equal(g.available(),'turnRight');assert.equal(g.careful,false);
- g.take('turnRight');assert.equal(g.available(),null);g.move(touch(1,300,600),.5);assert.equal(g.available(),null);g.end(touch(1,300,600),.6);
- g.begin(touch(11,200,600),b,0);g.move(touch(11,150,600),.08);assert.equal(g.available(),'turnLeft');g.end(touch(11,150,600),.1);
+ // A sideways flick: while the finger is down it only glances (no command); the turn comes when it lifts, once.
+ g.begin(touch(1,200,600),b,0);g.move(touch(1,250,600),.08);assert.equal(g.command,'look');assert.equal(g.available(),null);assert.ok(g.look>0);
+ assert.equal(g.end(touch(1,260,600),.18),'turnRight');assert.equal(g.look,0);
+ g.begin(touch(11,200,600),b,0);g.move(touch(11,150,600),.08);assert.equal(g.end(touch(11,150,600),.1),'turnLeft');
+ // The same slide held on past FLICK_SECONDS is a glance: lifting the finger never turns.
+ g.begin(touch(12,200,600),b,0);g.move(touch(12,250,600),.08);g.move(touch(12,300,600),.5);assert.equal(g.end(touch(12,300,600),.6),true);
+ // After the still-press click, even a quick slide only glances.
+ g.begin(touch(13,200,600),b,0);assert.equal(g.arm(HOLD_SECONDS+.01),true);g.move(touch(13,260,600),HOLD_SECONDS+.02);assert.equal(g.end(touch(13,270,600),.25),true);
+ // The click is a cue only: a quick flick still turns even if a slow frame clicked before the slide arrived.
+ g.begin(touch(14,200,600),b,0);g.arm(1);g.move(touch(14,260,600),.05);assert.equal(g.end(touch(14,270,600),.12),'turnRight');
  // Down steps back once per slide; up walks forward and keeps offering a step while held (one eased cell at a time).
  g.begin(touch(2,200,600),b,0);g.move(touch(2,200,660),.08);assert.equal(g.available(),'back');g.take('back');assert.equal(g.available(),null);g.end(touch(2,200,690),1.1);
  g.begin(touch(21,200,600),b,0);g.move(touch(21,200,540),.06);assert.equal(g.available(),'forward');g.take('forward');assert.equal(g.available(),'forward');g.end(touch(21,200,540),1);
@@ -123,10 +136,11 @@ test('a flick turns or steps once; a held sideways slide only glances, easing in
  // softly into 45 degrees either way (a natural glance), never reaching the next direction.
  assert.equal(LOOK_LIMIT_QUARTERS,.5);
  g.begin(touch(4,200,600),b,0);assert.equal(g.arm(HOLD_SECONDS-.01),false);assert.equal(g.arm(HOLD_SECONDS+.01),true);
- g.move(touch(4,230,602),HOLD_SECONDS+.1);assert.equal(g.command,'look');assert.equal(g.available(),null);assert.equal(g.look,0);
- g.move(touch(4,230+LOOK_PIXELS_PER_QUARTER/10,602),.35);assert.ok(Math.abs(g.look-.1)<.002,g.look);
- g.move(touch(4,230+LOOK_PIXELS_PER_QUARTER/2,602),.4);assert.ok(g.look>.35&&g.look<.4,g.look);
- let previous=0;for(let px=0;px<=2000;px+=25){g.move(touch(4,230+px,602),.45);assert.ok(g.look>=previous&&g.look<=LOOK_LIMIT_QUARTERS);previous=g.look;}
+ g.move(touch(4,230,602),HOLD_SECONDS+.1);assert.equal(g.command,'look');assert.equal(g.available(),null);
+ // From a still start the glance is measured from where the finger first touched.
+ g.move(touch(4,200+LOOK_PIXELS_PER_QUARTER/10,602),.35);assert.ok(Math.abs(g.look-.1)<.002,g.look);
+ g.move(touch(4,200+LOOK_PIXELS_PER_QUARTER/2,602),.4);assert.ok(g.look>.35&&g.look<.4,g.look);
+ let previous=0;for(let px=0;px<=2000;px+=25){g.move(touch(4,200+px,602),.45);assert.ok(g.look>=previous&&g.look<=LOOK_LIMIT_QUARTERS);previous=g.look;}
  assert.ok(previous>LOOK_LIMIT_QUARTERS*.99);assert.equal(g.available(),null,'looking never turns');
  // Swinging back through the origin keeps looking (now to the left); sliding up while looking does not walk.
  g.move(touch(4,150,602),.6);assert.equal(g.command,'look');assert.ok(g.look<0);
@@ -157,7 +171,9 @@ test('a held side-step glides on at a calm, steady pace',()=>{
 
 test('a turn from a look starts where the view is and lands exactly on the heading, in proportion of the time',()=>{
  const w=new GridWalker(flat(),{origin:[0,0]}),look=-Math.PI/4;
- assert.equal(w.command('turnRight',{look}),'turn');assert.ok(Math.abs(w.yaw-0)<1e-12);
+ assert.equal(w.command('turnRight',{look}),'turn');
+ // The yaw takes the glance at once, so the camera (yaw, with the glance handed over) never snaps back for a frame.
+ assert.ok(Math.abs(w.yaw-look)<1e-12);
  w.update(1/240);assert.ok(Math.abs(w.yaw-look)<.01,'continues from the looked-at direction');
  let t=1/240;while(w.action){w.update(1/240);t+=1/240;}
  assert.ok(Math.abs(w.yaw+Math.PI/2)<1e-12);assert.equal(w.heading,1);assert.ok(t<TURN_SECONDS*.7,t);
@@ -208,12 +224,12 @@ test('gliding over real hills, the eye stays smooth and clear of the ground',()=
  for(let f=0;f<6000&&k<cells.length;f++){
   w.update(1/60);
   if(!w.action){const [di,dj]=[cells[k][0]-w.i,cells[k][1]-w.j];w.heading=HEADINGS.findIndex(([a,b])=>a===di&&b===dj);w.yaw=headingYaw(w.heading);w.command('forward',{hold:true});k++;}
-  raw.push(height(w.x,w.z)+1.65);eye.push(w.y);
+  raw.push(height(w.x,w.z)+EYE_HEIGHT);eye.push(w.y);
  }
  const jolt=a=>{let m=0;for(let i=2;i<a.length;i++)m=Math.max(m,Math.abs(a[i]-2*a[i-1]+a[i-2]));return m;};
  // The bare triangle surface jolts the view at its edges; the eye's path is several times smoother.
  assert.ok(jolt(eye)<jolt(raw)/3,[jolt(eye),jolt(raw)]);
- assert.ok(Math.min(...eye.map((y,i)=>y-(raw[i]-1.65)))>1.15);
+ assert.ok(Math.min(...eye.map((y,i)=>y-(raw[i]-EYE_HEIGHT)))>1.15);
  assert.ok(Math.max(...eye.map((y,i)=>Math.abs(y-raw[i])))<.6);
 });
 
@@ -243,4 +259,16 @@ test('a step can start right after a turn; only a repeated turn waits',()=>{
  const w=new GridWalker(flat(),{origin:[0,0]});
  w.command('turnRight');while(w.action)w.update(1/60);
  assert.ok(w.cooldown>0);assert.equal(w.command('turnRight'),null);assert.equal(w.command('forward'),'step');
+});
+
+test('a cell that would put your nose against a rock is not a place to stand; open cells beside it still are',()=>{
+ assert.ok(GRID_CLEARANCE>=1);
+ // A big rock whose surface comes within 0.6 m of the next cell centre blocks that cell, but only with clearance on.
+ const rock=[circleCollider(0,-CELL-2.2,1.6)],loose=new GridWalker(flat(rock),{origin:[0,0]}),careful=new GridWalker(flat(rock),{origin:[0,0],clearance:GRID_CLEARANCE});
+ assert.equal(loose.canStep(0,0,0,-1),true);assert.equal(careful.canStep(0,0,0,-1),false);
+ assert.equal(careful.canStep(0,0,1,0),true);assert.equal(careful.command('forward'),'blocked');
+ // An exempt cell (a road through a gate) stays open.
+ const gate=new GridWalker(flat(rock),{origin:[0,0],clearance:GRID_CLEARANCE,exempt:(i,j)=>i===0&&j===-1});assert.equal(gate.canStep(0,0,0,-1),true);
+ // Farther away it does not matter.
+ const far=new GridWalker(flat([circleCollider(0,-CELL-4,1.6)]),{origin:[0,0],clearance:GRID_CLEARANCE});assert.equal(far.canStep(0,0,0,-1),true);
 });
