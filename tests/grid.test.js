@@ -59,7 +59,7 @@ test('every landmark on the real island is reachable on the 3 m grid from the la
 test('keys and slides map to the same six commands',()=>{
  assert.equal(keyCommand('KeyW'),'forward');assert.equal(keyCommand('ArrowDown'),'back');assert.equal(keyCommand('KeyA'),'strafeLeft');
  assert.equal(keyCommand('KeyE'),'turnRight');assert.equal(keyCommand('ArrowLeft'),'turnLeft');assert.equal(keyCommand('ShiftLeft'),null);
- assert.equal(swipeCommand(0,-10),null);assert.equal(swipeCommand(4,-40),'forward');assert.equal(swipeCommand(-3,40),'back');
+ assert.equal(swipeCommand(0,-10),null);assert.equal(swipeCommand(4,-40),'forward');assert.equal(swipeCommand(-3,40),'turnAround');assert.equal(swipeCommand(-3,40,true),'back');assert.equal(swipeCommand(-40,10,true),'strafeLeft');assert.equal(swipeCommand(4,-40,true),'forward');
  assert.equal(swipeCommand(-40,10),'turnLeft');assert.equal(swipeCommand(40,-10),'turnRight');
 });
 
@@ -104,18 +104,33 @@ test('a held walk glides between cells at constant speed and eases out on releas
  assert.equal(back,false);assert.equal(r.z,-CELL);
 });
 
-test('a slide that starts after resting or walking side-steps; a quick flick turns',()=>{
+test('a flick looks, a held slide walks carefully; the hold arms once and a tap never arms',()=>{
  const g=new GridGesture(),b={top:0,height:800},touch=(id,x,y)=>({pointerId:id,pointerType:'touch',clientX:x,clientY:y,button:0,buttons:1,isPrimary:true});
- g.begin(touch(1,200,600),b,0);g.move(touch(1,250,600),.1);assert.equal(g.command,'turnRight');g.end(touch(1,250,600),.2);
- g.begin(touch(2,200,600),b,0);g.move(touch(2,201,600),HOLD_SECONDS+.05);g.move(touch(2,150,602),HOLD_SECONDS+.1);assert.equal(g.command,'strafeLeft');
- // Staying sideways keeps crabbing even as time passes.
- g.move(touch(2,140,604),2);assert.equal(g.command,'strafeLeft');g.end(touch(2,140,604),2.1);
- // Walk forward, then slide sideways: crab, while facing forward. Sliding down backs off facing forward.
- g.begin(touch(3,200,600),b,0);g.move(touch(3,200,540),.1);assert.equal(g.command,'forward');
- g.move(touch(3,290,560),.8);assert.equal(g.command,'strafeRight');
- g.move(touch(3,205,680),1);assert.equal(g.command,'turnAround');g.end(touch(3,205,680),1.1);
- // A quick downward flick steps back once, facing forward; it is offered once per slide.
- g.begin(touch(4,200,600),b,0);g.move(touch(4,200,660),.08);assert.equal(g.command,'back');assert.equal(g.available(),'back');g.take('back');assert.equal(g.available(),null);g.move(touch(4,200,680),1);assert.equal(g.command,'back');assert.equal(g.available(),null);g.end(touch(4,200,680),1.1);
+ // Flicks: sideways turns, down turns round (offered once per slide), up walks.
+ g.begin(touch(1,200,600),b,0);g.move(touch(1,250,600),.08);assert.equal(g.command,'turnRight');assert.equal(g.careful,false);g.end(touch(1,250,600),.2);
+ g.begin(touch(2,200,600),b,0);g.move(touch(2,200,660),.08);assert.equal(g.available(),'turnAround');g.take('turnAround');assert.equal(g.available(),null);
+ g.move(touch(2,200,690),1);assert.equal(g.available(),null);g.end(touch(2,200,690),1.1);
+ // Held press: arms once at HOLD_SECONDS (the click), then every direction walks carefully.
+ g.begin(touch(3,200,600),b,0);assert.equal(g.arm(HOLD_SECONDS-.01),false);assert.equal(g.arm(HOLD_SECONDS+.01),true);assert.equal(g.arm(HOLD_SECONDS+.2),false);
+ g.move(touch(3,150,602),HOLD_SECONDS+.3);assert.equal(g.command,'strafeLeft');assert.equal(g.careful,true);
+ g.move(touch(3,202,550),.8);assert.equal(g.command,'forward');assert.equal(g.careful,true);
+ g.move(touch(3,202,660),1);assert.equal(g.command,'back');g.end(touch(3,202,660),1.1);
+ // Walking forward and then sliding sideways walks carefully too: a drifting finger never spins the view.
+ g.begin(touch(4,200,600),b,0);g.move(touch(4,200,540),.08);assert.equal(g.command,'forward');assert.equal(g.careful,false);
+ g.move(touch(4,290,560),.8);assert.equal(g.command,'strafeRight');assert.equal(g.careful,true);g.end(touch(4,290,560),.9);
+ // A tap is a quick still press; a still press long enough to arm is not a tap.
+ g.begin(touch(5,200,600),b,0);assert.equal(g.end(touch(5,200,600),.08),'tap');
+ g.begin(touch(6,200,600),b,0);g.arm(.3);assert.equal(g.end(touch(6,200,600),.35),true);
+ // A press that moves before arming never clicks.
+ g.begin(touch(7,200,600),b,0);g.move(touch(7,200,560),.05);assert.equal(g.arm(1),false);g.end(touch(7,200,560),1.1);
+});
+
+test('a careful step eases in and out over a longer time and rests before the next one',()=>{
+ const w=new GridWalker(flat(),{origin:[0,0]});assert.equal(w.command('forward',{slow:true,hold:true}),'step');
+ run(w,STEP_SECONDS+.02);assert.ok(w.action,'a careful step takes longer than a glide step');
+ while(w.action)w.update(1/120);assert.equal(w.z,-CELL);
+ assert.equal(w.command('forward',{slow:true}),null,'a short rest between careful steps');
+ assert.equal(w.command('turnRight'),'turn','turning is not held up by the rest');
 });
 
 test('roads lie on the grid as 4-connected cells and stay walkable from end to end',()=>{
@@ -159,7 +174,7 @@ test('gliding over real hills, the eye stays smooth and clear of the ground',()=
 test('an about-face turns right round, slower than a quarter turn, and lands exactly',()=>{
  const w=new GridWalker(flat(),{origin:[0,0]});assert.equal(w.command('turnAround'),'turn');
  run(w,TURN_SECONDS);assert.ok(w.busy);run(w,TURN_AROUND_SECONDS);assert.equal(w.heading,2);assert.ok(Math.abs(w.yaw-headingYaw(2))<1e-12);
- assert.equal(keyCommand('KeyX'),'turnAround');assert.ok(ONE_SHOT.has('turnAround')&&ONE_SHOT.has('back'));
+ assert.equal(keyCommand('KeyX'),'turnAround');assert.ok(ONE_SHOT.has('turnAround')&&!ONE_SHOT.has('back'));
 });
 
 test('a bump is a small, soft nudge that returns exactly to the cell',()=>{

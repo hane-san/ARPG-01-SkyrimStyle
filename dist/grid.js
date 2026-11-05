@@ -2,7 +2,7 @@
 // No DOM, WebGL or audio. The world supplies walkable(), height() and the swept move() of CollisionWorld.
 // 4.5 m cells. A held walk glides through cells at a constant 18.75 m/s (Shift: about 26 m/s);
 // it eases in from rest and eases out when the finger or key lets go, instead of pausing at every cell.
-export const CELL=6,GRID_ORIGIN=Object.freeze([8,30]),STEP_SECONDS=.32,QUICK_STEP_SECONDS=.23,TURN_SECONDS=.55,TURN_AROUND_SECONDS=.95,TURN_REPEAT_PAUSE=.2,BUMP_SECONDS=.26,EYE_HEIGHT=1.65,EYE_SETTLE_SECONDS=.1,EYE_FLOOR=1.4,EYE_SPREAD=2.6;
+export const CELL=6,GRID_ORIGIN=Object.freeze([8,30]),STEP_SECONDS=.32,QUICK_STEP_SECONDS=.23,TURN_SECONDS=.55,TURN_AROUND_SECONDS=.95,TURN_REPEAT_PAUSE=.2,SLOW_STEP_SECONDS=.5,SLOW_REST_SECONDS=.12,BUMP_SECONDS=.26,EYE_HEIGHT=1.65,EYE_SETTLE_SECONDS=.1,EYE_FLOOR=1.4,EYE_SPREAD=2.6;
 // Headings are compass quarters: 0 north (-z), 1 east (+x), 2 south (+z), 3 west (-x).
 export const HEADINGS=Object.freeze([[0,-1],[1,0],[0,1],[-1,0]]);
 export const HEADING_NAMES=Object.freeze(['北','東','南','西']);
@@ -16,7 +16,7 @@ export function hermiteSlope(w,m0,m1){return (3*w*w-4*w+1)*m0+(6*w-6*w*w)+(3*w*w
 export const COMMANDS=Object.freeze(['forward','back','strafeLeft','strafeRight','turnLeft','turnRight','turnAround']);
 // Touch commands that act once per slide rather than repeating while the finger is held.
 export const TURN_COMMANDS=Object.freeze(new Set(['turnLeft','turnRight','turnAround']));
-export const ONE_SHOT=Object.freeze(new Set(['back','turnAround']));
+export const ONE_SHOT=Object.freeze(new Set(['turnAround']));
 // Movement direction relative to the current heading, in quarter turns.
 const MOVE_OFFSET={forward:0,strafeRight:1,back:2,strafeLeft:3};
 
@@ -24,7 +24,7 @@ export class GridWalker {
  constructor(world,{origin=GRID_ORIGIN,cell=CELL,i=0,j=0,heading=0}={}){
   this.world=world;this.origin=origin;this.cell=cell;this.i=i;this.j=j;this.heading=(heading%4+4)%4;
   const [x,z]=this.center(i,j);this.x=x;this.z=z;this.y=this.eyeHeight(x,z);this.yaw=headingYaw(this.heading);
-  this.action=null;this.cooldown=0;this.steps=0;this.turns=0;this.bumps=0;this.travelled=0;this.speed=0;this.carry=null;
+  this.action=null;this.cooldown=0;this.rest=0;this.steps=0;this.turns=0;this.bumps=0;this.travelled=0;this.speed=0;this.carry=null;
   this.edges=new Map();this.visited=new Set([this.key(i,j)]);
  }
  key(i,j){return i+','+j;}
@@ -37,7 +37,7 @@ export class GridWalker {
  }
  center(i,j){return [this.origin[0]+i*this.cell,this.origin[1]+j*this.cell];}
  cellOf(x,z){return [Math.round((x-this.origin[0])/this.cell),Math.round((z-this.origin[1])/this.cell)];}
- get busy(){return this.action!==null||this.cooldown>0;}
+ get busy(){return this.action!==null||this.cooldown>0||this.rest>0;}
  // A step is legal only when the swept body reaches the next centre exactly: no water, no props, no sliding.
  canStep(i,j,ni,nj){
   const id=i+','+j+'>'+ni+','+nj;let ok=this.edges.get(id);
@@ -50,9 +50,10 @@ export class GridWalker {
  }
  // Starts a command. Returns 'step', 'turn', 'blocked', or null while a previous action is still playing.
  // hold: the input is still held, so the step leaves its cell at full speed instead of slowing to a stop.
- command(name,{quick=false,hold=false}={}){
+ // slow: a careful cell-by-cell step (held press then slide), easing in and out, with a short rest before the next one.
+ command(name,{quick=false,hold=false,slow=false}={}){
   // The pause after a turn only spaces out repeated turns: a step may start straight away.
-  if(this.action!==null||!COMMANDS.includes(name)||(this.cooldown>0&&TURN_COMMANDS.has(name)))return null;
+  if(this.action!==null||!COMMANDS.includes(name)||(this.cooldown>0&&TURN_COMMANDS.has(name))||(slow&&this.rest>0))return null;
   const carry=this.carry;this.carry=null;
   if(name==='turnLeft'||name==='turnRight'||name==='turnAround'){
    const quarters=name==='turnRight'?1:name==='turnLeft'?-1:2,from=this.yaw;
@@ -69,10 +70,10 @@ export class GridWalker {
    this.bumps++;this.action={kind:'bump',t:0,duration:BUMP_SECONDS,ax,az,dx,dz};return 'blocked';
   }
   this.i=ni;this.j=nj;this.visited.add(this.key(ni,nj));this.steps++;
-  const duration=quick?QUICK_STEP_SECONDS:STEP_SECONDS;
+  const duration=slow?SLOW_STEP_SECONDS:quick?QUICK_STEP_SECONDS:STEP_SECONDS;
   // Arriving speed carries into a step in the same direction, so a held walk never pauses between cells.
-  const m0=carry&&carry.dx===dx&&carry.dz===dz?Math.min(1.6,carry.speed*duration/this.cell):0;
-  this.action={kind:'step',t:0,duration,ax,az,bx,bz,dx,dz,s0:0,m0,m1:hold?1:0};
+  const m0=!slow&&carry&&carry.dx===dx&&carry.dz===dz?Math.min(1.6,carry.speed*duration/this.cell):0;
+  this.action={kind:'step',t:0,duration,ax,az,bx,bz,dx,dz,s0:0,m0,m1:hold&&!slow?1:0,slow};
   // A chained step also uses the part of this frame left over after landing, so the glide never hitches.
   if(m0>0&&carry.spare>0){
    const a=this.action;a.t=Math.min(duration,carry.spare);const s=hermite(a.t/duration,m0,a.m1),px=this.x,pz=this.z;
@@ -102,7 +103,7 @@ export class GridWalker {
  update(dt){
   this.travelled=0;this.speed=0;
   if(!(dt>0&&Number.isFinite(dt)))return null;
-  if(!this.action){this.carry=null;this.cooldown=Math.max(0,this.cooldown-dt);this.followGround(dt);return null;}
+  if(!this.action){this.carry=null;this.cooldown=Math.max(0,this.cooldown-dt);this.rest=Math.max(0,this.rest-dt);this.followGround(dt);return null;}
   const a=this.action,spare=a.t+dt-a.duration;a.t=Math.min(a.duration,a.t+dt);const w=a.t/a.duration;
   const px=this.x,pz=this.z;
   if(a.kind==='step'){const s=a.s0+(1-a.s0)*hermite(w,a.m0,a.m1);this.x=a.ax+(a.bx-a.ax)*s;this.z=a.az+(a.bz-a.az)*s;}
@@ -113,7 +114,7 @@ export class GridWalker {
   if(a.t<a.duration)return null;
   // Land exactly on the grid: no accumulated drift after hundreds of steps.
   if(a.kind==='turn'){this.yaw=Math.round((a.fromYaw+a.deltaYaw)/(Math.PI/2))*(Math.PI/2);this.cooldown=TURN_REPEAT_PAUSE;}
-  else[this.x,this.z]=this.center(this.i,this.j);
+  else{[this.x,this.z]=this.center(this.i,this.j);if(a.slow)this.rest=SLOW_REST_SECONDS;}
   if(a.kind==='step'&&a.m1>0)this.carry={dx:a.dx,dz:a.dz,speed:(1-a.s0)*a.m1*this.cell/a.duration,spare:Math.max(0,spare),frame:dt};
   this.action=null;return a.kind;
  }
@@ -156,21 +157,25 @@ export function gridRoute(points,origin=GRID_ORIGIN,cell=CELL,walkable=null){
 const KEY_COMMANDS={KeyX:'turnAround',KeyW:'forward',ArrowUp:'forward',KeyS:'back',ArrowDown:'back',KeyA:'strafeLeft',KeyD:'strafeRight',KeyQ:'turnLeft',ArrowLeft:'turnLeft',KeyE:'turnRight',ArrowRight:'turnRight'};
 export function keyCommand(code){return KEY_COMMANDS[code]||null;}
 
-// Touch: one finger in the lower half. Slide up to walk forward (holding repeats); a short tap is one step forward.
-// A quick downward flick steps back once, still facing forward. A downward slide that starts after the finger has
-// rested or walked for HOLD_SECONDS turns right round instead (once). A quick sideways flick turns a quarter;
-// a sideways slide after HOLD_SECONDS side-steps (crab walk).
-export const SWIPE_DISTANCE=22,TAP_DISTANCE=10,TAP_SECONDS=.3,HOLD_SECONDS=.2;
-export function swipeCommand(dx,dy,crab=false){
+// Touch: one finger in the lower half. The rule fits in one sentence: a flick looks, a held slide walks.
+// - A quick flick (a slide that starts within HOLD_SECONDS): up walks forward (gliding while held), left/right turn a
+//   quarter (repeating while held), down turns right round (once per slide).
+// - A held press (the game clicks when it arms) and then a slide walks carefully, one cell at a time with a short
+//   rest between cells: up forward, down back, left/right side-steps. Facing never changes.
+// - Walking forward and then sliding sideways or back also walks carefully, so a drifting finger never spins the view.
+// A short still tap is one step forward.
+export const SWIPE_DISTANCE=22,TAP_DISTANCE=10,HOLD_SECONDS=.16,TAP_SECONDS=HOLD_SECONDS;
+const FLICK={up:'forward',down:'turnAround',left:'turnLeft',right:'turnRight'},CAREFUL={up:'forward',down:'back',left:'strafeLeft',right:'strafeRight'};
+export function swipeDirection(dx,dy){
  if(Math.hypot(dx,dy)<SWIPE_DISTANCE)return null;
- if(Math.abs(dy)>=Math.abs(dx))return dy<0?'forward':crab?'turnAround':'back';
- return crab?(dx<0?'strafeLeft':'strafeRight'):(dx<0?'turnLeft':'turnRight');
+ return Math.abs(dy)>=Math.abs(dx)?(dy<0?'up':'down'):(dx<0?'left':'right');
 }
+export function swipeCommand(dx,dy,careful=false){const d=swipeDirection(dx,dy);return d?(careful?CAREFUL:FLICK)[d]:null;}
 export class GridGesture {
- constructor(){this.contacts=new Set();this.id=null;this.origin=null;this.started=0;this.command=null;this.blocked=false;this.moved=false;this.sideways=null;this.downward=null;this.taken=null;}
+ constructor(){this.contacts=new Set();this.id=null;this.origin=null;this.started=0;this.command=null;this.careful=false;this.blocked=false;this.moved=false;this.segment=null;this.armed=false;this.taken=null;}
  get held(){return this.id!==null;}
- clearOwner(){const id=this.id;this.id=null;this.origin=null;this.command=null;this.moved=false;this.sideways=null;this.downward=null;this.taken=null;return id;}
- // The command to act on now: a one-shot (step back, about-face) is offered once per slide.
+ clearOwner(){const id=this.id;this.id=null;this.origin=null;this.command=null;this.careful=false;this.moved=false;this.segment=null;this.armed=false;this.taken=null;return id;}
+ // The command to act on now: a one-shot (the about-face) is offered once per slide.
  available(){return this.command&&!(ONE_SHOT.has(this.command)&&this.taken===this.command)?this.command:null;}
  take(command){if(ONE_SHOT.has(command))this.taken=command;}
  reset(){const id=this.clearOwner();this.contacts.clear();this.blocked=false;return id;}
@@ -182,31 +187,33 @@ export class GridGesture {
    if(this.blocked)return false;
   }
   if(this.held||e.clientY-bounds.top<bounds.height*.5)return false;
-  this.id=e.pointerId;this.origin={x:e.clientX,y:e.clientY};this.started=now;this.command=null;this.moved=false;this.sideways=null;this.downward=null;this.taken=null;return true;
+  this.id=e.pointerId;this.origin={x:e.clientX,y:e.clientY};this.started=now;this.command=null;this.careful=false;this.moved=false;this.segment=null;this.armed=false;this.taken=null;return true;
+ }
+ // A still press that has lasted HOLD_SECONDS arms careful walking. Returns true once, when it arms (time to click).
+ arm(now){
+  if(!this.held||this.armed||this.moved||this.command||now-this.started<HOLD_SECONDS)return false;
+  this.armed=true;return true;
  }
  move(e,now){
   if(e.pointerId!==this.id)return false;
   if(e.pointerType==='mouse'&&(e.buttons&1)===0){this.end(e,now);return false;}
   const dx=e.clientX-this.origin.x,dy=e.clientY-this.origin.y;
   if(Math.hypot(dx,dy)>TAP_DISTANCE)this.moved=true;
-  const direction=swipeCommand(dx,dy);
-  // Decide once per slide direction: a flick turns or steps back, a slide after resting or walking crabs or turns round.
-  const late=now-this.started>=HOLD_SECONDS;
-  if(direction==='turnLeft'||direction==='turnRight'){
-   if(this.sideways===null)this.sideways=late?'crab':'turn';
-   this.downward=null;this.command=swipeCommand(dx,dy,this.sideways==='crab');
-  }else if(direction==='back'){
-   if(this.downward===null)this.downward=late?'round':'step';
-   this.sideways=null;this.command=this.downward==='round'?'turnAround':'back';
-  }else{this.sideways=null;this.downward=null;this.command=direction;}
-  if(this.command!==this.taken&&!ONE_SHOT.has(this.command))this.taken=null;
+  const direction=swipeDirection(dx,dy);
+  // Each new slide direction decides once, on the events' own times: early is a flick, after HOLD_SECONDS it walks
+  // carefully. (The click is only the audible sign of the same threshold.)
+  if(direction!==this.segment){this.segment=direction;this.careful=!!direction&&now-this.started>=HOLD_SECONDS;}
+  this.command=direction?(this.careful?CAREFUL:FLICK)[direction]:null;
+  if(this.command!==this.taken)this.taken=null;
   return true;
  }
  // Returns 'tap' when the release was a short, still press; otherwise true/false for ownership.
  end(e,now){
   this.contacts.delete(e.pointerId);if(!this.contacts.size)this.blocked=false;
   if(e.pointerId!==this.id)return false;
-  const tap=!this.moved&&!this.command&&now-this.started<=TAP_SECONDS;
+  // Judged on the events' own times: a busy frame that delays the release (and may already have clicked) never
+  // turns a quick tap into a press.
+  const tap=!this.moved&&!this.command&&now-this.started<TAP_SECONDS;
   this.clearOwner();return tap?'tap':true;
  }
 }
