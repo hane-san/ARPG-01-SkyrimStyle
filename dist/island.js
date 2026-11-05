@@ -3,7 +3,7 @@ const {CRUISE_SPEED,footStride,nearPlaneMargin,CollisionWorld,circleCollider,box
 const {journeyScenes,landscapeColor,readingSeconds,JourneyNotices}=await import('./journey.js'+new URL(import.meta.url).search);
 const {REGIONS,SHORE_REGION,RegionTracker}=await import('./regions.js'+new URL(import.meta.url).search);
 const {RegionMusic}=await import('./music.js'+new URL(import.meta.url).search);
-const {LOOK_DEGREES,LOOK_TURN,ONE_SHOT,TURN_COMMANDS,CELL,GRID_ORIGIN,STEP_SECONDS,QUICK_STEP_SECONDS,HEADING_NAMES,GridWalker,GridGesture,keyCommand,automapCells,gridRoute,gridCells}=await import('./grid.js'+new URL(import.meta.url).search);
+const {ONE_SHOT,TURN_COMMANDS,CELL,GRID_ORIGIN,STEP_SECONDS,QUICK_STEP_SECONDS,HEADING_NAMES,GridWalker,GridGesture,keyCommand,automapCells,gridRoute,gridCells}=await import('./grid.js'+new URL(import.meta.url).search);
 // Dungeon-crawler travel is the default (producer decision 2026-11-04): the same island, one grid cell at a time.
 // ?grid=0 keeps the earlier free walking for comparison and its regression checks.
 const GRID_MODE=new URLSearchParams(location.search).get('grid')!=='0';
@@ -54,7 +54,11 @@ const cellCentre=(i,j)=>[GRID_ORIGIN[0]+i*CELL,GRID_ORIGIN[1]+j*CELL];
 // terrain within three cells, with already-taken cells counted as blocked). Sandbars and narrow shores stay passable.
 const terrainSteps=GRID_MODE?new GridWalker(new CollisionWorld([],{height,walkable}),{origin:GRID_ORIGIN,cell:CELL}):null;
 const QUARTERS=[[0,-1],[1,0],[0,1],[-1,0]];
+// A corridor or dead-end cell (two or fewer dry neighbours you can step to) is never taken either: a chain of such cells
+// is how a sandbar or a narrow spit reaches somewhere, and filling it from one end would cut the far end off.
+const corridorCell=(i,j)=>QUARTERS.filter(([di,dj])=>terrainSteps.canStep(i,j,i+di,j+dj)).length<=2;
 function pinchCell(i,j){
+ if(corridorCell(i,j))return true;
  const open=QUARTERS.map(([di,dj])=>[i+di,j+dj]).filter(([a,b])=>!claimedCells.has(a+','+b)&&terrainSteps.canStep(i,j,a,b));
  if(open.length<2)return false;
  const seen=new Set([open[0].join(',')]),queue=[open[0]];
@@ -94,7 +98,7 @@ const [tx,tz]=gatewayCell(23,8),[sx,sz]=gatewayCell(-4,-13);
 // Issue #21 set pieces own these rectangles (x0,x1,z0,z1): no random tree or rock grows inside them in either mode.
 // Set pieces sit on cell centres in both modes, so they fit the grid's cells exactly whatever the cell size.
 const snapCentre=(x,z)=>cellCentre(...cellIndex(x,z)),cellRect=([x,z],i0,i1,j0,j1)=>[x+(i0-.5)*CELL,x+(i1+.5)*CELL,z+(j0-.5)*CELL,z+(j1+.5)*CELL];
-const GLASSHOUSE=snapCentre(-19,5),HAMLET=snapCentre(17,-15),PINWHEELS=snapCentre(-21,-20),POND=snapCentre(-10,-73.5),WINDGATE=snapCentre(-10,-28.5);
+const GLASSHOUSE=snapCentre(-19,5),HAMLET=snapCentre(17,-15),PINWHEELS=snapCentre(-21,-20),POND=snapCentre(-10,-73.5);
 const RESERVED=[cellRect(GLASSHOUSE,-1,1,0,1),cellRect(HAMLET,-1,1,-1,1),cellRect(PINWHEELS,0,1,-1,1),cellRect(POND,0,0,0,0)];
 const reserved=(x,z)=>RESERVED.some(([x0,x1,z0,z1])=>x>=x0&&x<=x1&&z>=z0&&z<=z1);
 if(GRID_MODE)for(const [x0,x1,z0,z1] of RESERVED){const [i0,j0]=cellIndex(x0,z0),[i1,j1]=cellIndex(x1,z1);for(let j=j0;j<=j1;j++)for(let i=i0;i<=i1;i++){const [x,z]=cellCentre(i,j);if(reserved(x,z))claimedCells.add(i+','+j);}}
@@ -126,7 +130,7 @@ function terrainColor(x,z){
 // Clip path ribbons to the exact ground triangles: continuous paths without hovering over hills.
 const roadSegments=[];
 for(const points of travelRoutes)for(let i=1;i<points.length;i++){
- const [ax,az]=points[i-1],[bx,bz]=points[i],len=Math.hypot(bx-ax,bz-az),w=GRID_MODE?(Math.min(az,bz)<-128?2.1:1.6):Math.min(az,bz)<-128?4.2:1.45,nx=-(bz-az)/len*w,nz=(bx-ax)/len*w;
+ const [ax,az]=points[i-1],[bx,bz]=points[i],len=Math.hypot(bx-ax,bz-az),w=GRID_MODE?(Math.min(az,bz)<-128?3:2.5):Math.min(az,bz)<-128?4.2:1.45,nx=-(bz-az)/len*w,nz=(bx-ax)/len*w;
  // Grid roads turn square corners: each straight run reaches half a road width past its end.
  const ex=GRID_MODE?(bx-ax)/len*w:0,ez=GRID_MODE?(bz-az)/len*w:0;
  roadSegments.push({polygon:[[ax-ex+nx,az-ez+nz],[bx+ex+nx,bz+ez+nz],[bx+ex-nx,bz+ez-nz],[ax-ex-nx,az-ez-nz]],minX:Math.min(ax,bx)-w,maxX:Math.max(ax,bx)+w,minZ:Math.min(az,bz)-w,maxZ:Math.max(az,bz)+w,ends:[[ax,az],[bx,bz]],w});
@@ -145,6 +149,8 @@ function clipRoad(polygon,triangle){
  return out;
 }
 const roadChunks=[];
+// Grid roads are a deeper, trodden earth, so the way stays readable across pale sand and meadow.
+const ROAD_COLOUR=hex(GRID_MODE?'c4b391':'d5cbb1');
 
 const terrainChunks=[];
 for(let tz=WORLD_BOUNDS.minZ;tz<WORLD_BOUNDS.maxZ;tz+=64)for(let tx=WORLD_BOUNDS.minX;tx<WORLD_BOUNDS.maxX;tx+=64){
@@ -161,7 +167,7 @@ for(let tz=WORLD_BOUNDS.minZ;tz<WORLD_BOUNDS.maxZ;tz+=64)for(let tx=WORLD_BOUNDS
   if(road.maxX<x||road.minX>x+step||road.maxZ<z||road.minZ>z+step)continue;
   for(const triangle of [[[x,z],[x+step,z],[x,z+step]],[[x+step,z],[x+step,z+step],[x,z+step]]]){
    const p=clipRoad(road.polygon,triangle),point=a=>[a[0],height(a[0],a[1])+.015,a[1]];
-   for(let i=1;i<p.length-1;i++)tri(point(p[0]),point(p[i]),point(p[i+1]),hex('d5cbb1'));
+   for(let i=1;i<p.length-1;i++)tri(point(p[0]),point(p[i]),point(p[i+1]),ROAD_COLOUR);
   }
  }
  if(data.length)roadChunks.push({...batch(),x:tx+32,z:tz+32,r:46});
@@ -460,7 +466,8 @@ function emptyChair(x,z){
  }
  addBox(x,z,.42,.39,'chair');
 }
-const scenes=journeyScenes.map(scene=>{if(!GRID_MODE)return scene;const c=claimCell(scene.x,scene.z,true)||[scene.x,scene.z];return {...scene,x:c[0],z:c[1]};});
+// A quiet scene, like an islander, keeps a free cell beside it to stand on and look from.
+const scenes=journeyScenes.map(scene=>{if(!GRID_MODE)return scene;const c=claimCell(scene.x,scene.z,true,(i,j)=>approachCell(i,j)!==null);if(!c)return scene;const key=approachCell(...cellIndex(...c));if(key&&!roadCells.has(key))approachKept.add(key);return {...scene,x:c[0],z:c[1]};});
 for(const scene of scenes){
  const {x,z,kind}=scene,y=height(x,z);
  if(kind==='boat'){
@@ -546,10 +553,10 @@ sceneryBatch(3,14,16);
  {const by=height(gx,zB),half=C*.3;box(gx,by-.1,zB,half*2,.6,half*2,pal.stone);quad([gx-half+.2,by+.52,zB-half+.2],[gx+half-.2,by+.52,zB-half+.2],[gx+half-.2,by+.52,zB+half-.2],[gx-half+.2,by+.52,zB+half-.2],hex('acd0d2'));cone(gx,by+.5,zB,.18,.1,1.1,pal.cream,7);sphere(gx,by+1.6,zB,.32,.2,.32,pal.cream,8,4);addCircle(gx,zB,half,'greenhouse-basin');}
  // Hanging pots along the aisle.
  for(let x=x0+2.2;x<x1;x+=2.25){branch([x,y+wall,zA],[x,y+wall-.9,zA],.012,pal.bark);sphere(x,y+wall-1.05,zA,.24,.2,.24,pal.olive,7,4);}
- sceneryBatch(gx,zm,12);
+ sceneryBatch(gx,zm,Math.hypot(1.5*C,C)+1.5);
  // Gravel aisle along the open row (a ground decal).
  for(let x=x0;x<x1;x+=1.5)quad([x,height(x,zA-1.3)+.03,zA-1.3],[x,height(x,zA+1.3)+.03,zA+1.3],[x+1.5,height(x+1.5,zA+1.3)+.03,zA+1.3],[x+1.5,height(x+1.5,zA-1.3)+.03,zA-1.3],hex((x*2|0)%2?'ddd5c3':'d6cfbe'));
- sceneryBatch(gx,zA,11,true);
+ sceneryBatch(gx,zA,1.5*C+2,true);
 }
 // 3. The sky hamlet: small houses, a laundry line, a little glass pyramid, an outdoor table and islands afloat.
 {
@@ -595,9 +602,13 @@ sceneryBatch(3,14,16);
 }
 // 6. The singing gate: two stacked rock pillars and an arch over the north road, with wind-cut spires around.
 {
- const [x,z]=WINDGATE,y=height(x,z);
- for(const s of [-1,1]){const lx=x+s*3.2,ly=height(lx,z);for(let k=0;k<4;k++)sphere(lx+s*.08*k,ly+.9+k*1.3,z+(k%2?.18:-.18),1.25-k*.07,.9,1.1,hex(k%2?'9aa39c':'aeb3a6'),8,4);addCircle(lx,z,1.1,'windgate');}
- for(let k=0;k<=8;k++){const a=Math.PI*k/8;sphere(x-Math.cos(a)*3.2,y+5.5+Math.sin(a)*1.7,z,.95,.72,1,hex(k%2?'a4aca3':'b6b9ab'),7,4);}
+ // The gate straddles the road: on the grid, the road cell nearest the old north road, and turned across the road's run.
+ let x=-10,z=-28.5,acrossX=true;
+ if(GRID_MODE){let best=null;for(const key of roadCells){const [i,j]=key.split(',').map(Number),[cx,cz]=cellCentre(i,j),d=Math.hypot(cx-x,cz-z);if(!best||d<best.d)best={i,j,cx,cz,d};}
+  x=best.cx;z=best.cz;acrossX=roadCells.has(best.i+','+(best.j-1))||roadCells.has(best.i+','+(best.j+1));}
+ const y=height(x,z),across=(d)=>acrossX?[x+d,z]:[x,z+d],leg=CELL*.43;
+ for(const s of [-1,1]){const [lx,lz]=across(s*leg),ly=height(lx,lz);for(let k=0;k<4;k++)sphere(lx+(acrossX?s*.08*k:(k%2?.18:-.18)),ly+.9+k*1.3,lz+(acrossX?(k%2?.18:-.18):s*.08*k),1.25-k*.07,.9,1.1,hex(k%2?'9aa39c':'aeb3a6'),8,4);addCircle(lx,lz,1.1,'windgate');}
+ for(let k=0;k<=8;k++){const a=Math.PI*k/8,[ax,az]=across(-Math.cos(a)*leg);sphere(ax,y+5.5+Math.sin(a)*1.7,az,.95,.72,1,hex(k%2?'a4aca3':'b6b9ab'),7,4);}
  for(const [dx,dz,h] of [[-6,-4,4.2],[6.5,2,5],[-5.5,5,3.2],[5.5,-5,3.6]]){const p=spot(x+dx,z+dz);if(!p||routeDistance(p[0],p[1])<2)continue;cone(p[0],height(p[0],p[1]),p[1],.85,.12,h,hex('a2aaa2'),6);addCircle(p[0],p[1],.7,'wind-spire');}
  sceneryBatch(x,z,14);
 }
@@ -646,6 +657,37 @@ sceneryBatch(3,14,16);
  sceneryBatch(-31,22,24);
 }
 
+// Low wooden fences run along stretches of the grid roads, so a road reads as a path to follow. They stand on the cell
+// boundary beside the road and really block that side; regular gaps, junctions, plazas near named places, set pieces,
+// islanders and their approach cells stay open, so every place can still be reached (grid-check walks it all).
+if(GRID_MODE){
+ const buckets=new Map(),blockedSides=new Set(),C=CELL;
+ const nearPlace=(x,z)=>landmarks.some(([,,lx,lz,r])=>Math.hypot(x-lx,z-lz)<Math.max(r,C*1.6))||scenes.some(sc=>Math.hypot(x-sc.x,z-sc.z)<C*1.5)||npcs.some(n=>Math.hypot(x-n.x,z-n.z)<C*1.5)||reserved(x,z);
+ for(const key of roadCells){
+  const [i,j]=key.split(',').map(Number),[cx,cz]=cellCentre(i,j);
+  const roadNeighbours=QUARTERS.filter(([di,dj])=>roadCells.has((i+di)+','+(j+dj))).length;
+  if(roadNeighbours!==2||nearPlace(cx,cz))continue;
+  for(const [di,dj] of QUARTERS){
+   const nkey=(i+di)+','+(j+dj),[nx,nz]=cellCentre(i+di,j+dj);
+   if(roadCells.has(nkey)||approachKept.has(nkey)||!walkable(nx,nz)||nearPlace(nx,nz))continue;
+   // About three sides in five are fenced, decided by a fixed pattern so the gaps stay where they are.
+   const hash=((i*73856093)^(j*19349663)^((di+2)*83492791)^((dj+2)*2654435761))>>>0;
+   if(hash%5>=3)continue;
+   const bx=cx+di*C/2,bz=cz+dj*C/2,ax=dj!==0,side=key+'>'+nkey;blockedSides.add(side);
+   const tileKey=Math.floor(bx/64)+','+Math.floor(bz/64);let list=buckets.get(tileKey);if(!list)buckets.set(tileKey,list=[]);list.push([bx,bz,ax]);
+   addBox(bx,bz,ax?C/2:.06,ax?.06:C/2,'fence');
+  }
+ }
+ for(const [tileKey,list] of buckets){
+  const [tx2,tz2]=tileKey.split(',').map(Number);
+  for(const [bx,bz,alongX] of list){
+   const ends=alongX?[[bx-C/2,bz],[bx+C/2,bz]]:[[bx,bz-C/2],[bx,bz+C/2]];
+   for(let k=0;k<=4;k++){const t=k/4,px=ends[0][0]+(ends[1][0]-ends[0][0])*t,pz=ends[0][1]+(ends[1][1]-ends[0][1])*t,py=height(px,pz);box(px,py-.05,pz,.14,1.05,.14,hex('9a8f78'));}
+   for(const h of [.45,.85]){const [a,b]=ends;branch([a[0],height(a[0],a[1])+h,a[1]],[b[0],height(b[0],b[1])+h,b[1]],.035,hex('b3a78c'));}
+  }
+  sceneryBatch(tx2*64+32,tz2*64+32,48);
+ }
+}
 // Small patches break up long uniform verges without filling every empty view.
 // Their spacing follows the route; the road surface and sightlines stay clear.
 let vergeIndex=0;
@@ -761,11 +803,12 @@ let lookYaw=0,activeCommand=null,bumpedCommand=null,bumpedAt=null;
 function gridUpdate(dt){
  // A still press arms the held mode: a soft click (and a tap of vibration where supported) says so.
  if(gridGesture.arm(performance.now()/1000))holdClick();
- // Looking around: the view follows the finger up to LOOK_DEGREES; pulling further clicks and turns a quarter,
- // starting from where the view already is. Letting go (or leaving the look) eases the view back to the heading.
- const look=gridGesture.look,lookLimit=LOOK_DEGREES*Math.PI/180;
- if(Math.abs(look)>=LOOK_TURN&&!walker.action&&walker.cooldown<=0&&walker.command(look>0?'turnRight':'turnLeft',{look:lookYaw})==='turn'){lookYaw=0;gridGesture.rebaseLook();holdClick();}
- else lookYaw+=(-Math.max(-1,Math.min(1,look))*lookLimit-lookYaw)*(1-Math.exp(-dt*12));
+ // Looking around: the view follows the finger continuously, like an ordinary 3D game. Whenever it points closer to a
+ // neighbouring direction (past 45 degrees, with a little hysteresis), that becomes the heading with a soft tick, and the
+ // view stays exactly where it is. Letting go settles the view gently on the heading.
+ const looking=gridGesture.look!==0||gridGesture.command==='look';
+ lookYaw+=(-gridGesture.look*Math.PI/2-lookYaw)*(1-Math.exp(-dt*(looking?20:6)));
+ if(Math.abs(lookYaw)>Math.PI/4+.04){const q=lookYaw<0?1:-1;if(walker.reaim(q)){lookYaw+=q*Math.PI/2;gridGesture.shiftLook(q);holdClick();}}
  const held=heldCommand();
  // Letting go (or changing direction) mid-step slows to a stop on the cell being entered.
  if(held!==activeCommand)walker.easeOut();
@@ -781,9 +824,10 @@ function gridUpdate(dt){
    // One-shot touch commands (a step back, an about-face) act once per slide and always ease to a stop.
    // A held press then slide walks carefully: one eased cell at a time with a short rest, never a glide.
    // Flicked side-steps and steps back are single eased cells; the held-press walk forward strolls without stopping.
-   const fromGesture=!fresh&&gridGesture.held&&command===gridGesture.command;
-   const slow=fromGesture&&(command==='strafeLeft'||command==='strafeRight'||command==='back'),stroll=fromGesture&&gridGesture.careful&&command==='forward';
-   const result=walker.command(command,{quick:keys.has('ShiftLeft')||keys.has('ShiftRight'),slow,stroll,hold:command===held&&!slow&&!(fromGesture&&ONE_SHOT.has(command))});
+   // Touch: side-steps glide on while held, a step back is one eased cell, the held-press walk strolls without stopping.
+   const fromGesture=!fresh&&gridGesture.held&&command===gridGesture.available();
+   const side=fromGesture&&(command==='strafeLeft'||command==='strafeRight'),slow=fromGesture&&command==='back',stroll=fromGesture&&gridGesture.careful&&command==='forward';
+   const result=walker.command(command,{quick:keys.has('ShiftLeft')||keys.has('ShiftRight'),slow,side,stroll,hold:command===held&&!slow&&!(fromGesture&&ONE_SHOT.has(command))});
    if(result&&!fresh&&gridGesture.held)gridGesture.take(command);
    if(result==='step'){const [x,z]=walker.center(walker.i,walker.j);footstep(surfaceAt(x,z),CELL/STEP_SECONDS);}
    if(result==='blocked'){bumpedCommand=command;bumpedAt=where;}else if(result){bumpedCommand=null;}
@@ -1039,10 +1083,10 @@ function drawAutomap(){
 }
 if(GRID_MODE){
  document.body.classList.add('grid-mode');
- canvas.setAttribute('aria-label',canvas.getAttribute('aria-label').split('。')[0]+'。マス目を一つずつ歩きます。W/Sで一マス前後、A/Dで横へ一マス、Q/Eまたは左右矢印で90度向きを変え、Xで振り返ります。画面下半分では、はじくと体ごと動き（上は前進、左右はカニ歩き、下は一歩後ろ）、少し押して音がしてから滑らせると顔を向けます（左右で見渡し、さらに引くと旋回、下で振り返り、上でゆったり前進）。軽く触れると一マス進みます。');
- const notes=document.querySelector('.notes p');if(notes)notes.innerHTML='マス目をひとつずつ歩く。下半分ではじくと「体ごと動く」：上で前進、左右でカニ歩き、下で1歩後ろへ。<br>少し押して「カチッ」としたら滑らせると「顔を向ける」：左右で見渡し、さらに引くと90度旋回。下で振り返り、上でゆったり歩く。<br>軽く触れると一マス。PCは W A S D · Q E · ← → · X。';
+ canvas.setAttribute('aria-label',canvas.getAttribute('aria-label').split('。')[0]+'。マス目を一つずつ歩きます。W/Sで一マス前後、A/Dで横へ一マス、Q/Eまたは左右矢印で90度向きを変え、Xで振り返ります。画面下半分では、はじくと体ごと動き（上は前進、左右はカニ歩き、下は一歩後ろ）、少し押して音がしてから左右へ滑らせると見渡します。45度を越えるとその方向が正面になり、見渡しながら指を上へずらすとその方向へ歩きます。軽く触れると一マス進みます。');
+ const notes=document.querySelector('.notes p');if(notes)notes.innerHTML='マス目をひとつずつ歩く。下半分ではじくと「体ごと動く」：上で前進、左右でカニ歩き、下で1歩後ろへ（押したままで続ける）。<br>少し押して「カチッ」としたら左右へ滑らせると「見渡す」：視線が指についてきて、45度を越えるとそちらが正面に。見渡しながら指を上へずらすとそのまま歩く。<br>軽く触れると一マス。PCは W A S D · Q E · ← → · X。';
  const book=document.querySelector('.book-controls');
- if(book)book.innerHTML='<h3>マス目を歩く</h3><p><b>はじく＝体ごと動く</b><br>上：前へ歩く（保持で歩き続ける）／左右：カニ歩き（保持で1マスずつ）／下：1歩後ろへ<br><b>少し押して「カチッ」→ 滑らせる＝顔を向ける</b><br>左右：指に合わせて景色を見渡す（45度まで）。さらに引くと「カチッ」と90度旋回<br>下：振り返る／上：止まらずゆったり前へ歩く<br>離すと視線は正面に戻ります。軽く触れると一マス進みます。</p><p class="keyboard-notes">PC：W / S で前後 ／ A / D で横へ一マス ／ Q E ・ ← → で向き替え ／ X で振り返る<br>Shift で早足 ／ M で地図 ／ H でしおり ／ Esc で入力解除</p>';
+ if(book)book.innerHTML='<h3>マス目を歩く</h3><p><b>はじく＝体ごと動く</b><br>上：前へ歩く／左右：カニ歩き／下：1歩後ろへ（上と左右は押したままで続く）<br><b>少し押して「カチッ」→ 左右へ滑らせる＝見渡す</b><br>視線が指についてきます。45度を越えると「カチッ」とそちらが正面になります。<br>見渡しながら指を上へずらすと、見ている方へそのまま歩きます。<br>離すと視線は正面に落ち着きます。軽く触れると一マス進みます。</p><p class="keyboard-notes">PC：W / S で前後 ／ A / D で横へ一マス ／ Q E ・ ← → で向き替え ／ X で振り返る<br>Shift で早足 ／ M で地図 ／ H でしおり ／ Esc で入力解除</p>';
 }
 function begin(){if(started||contextLost)return;started=true;notices.clear();document.body.classList.add('playing');canvas.focus();audio();}
 const beginButton=document.querySelector('#begin');beginButton.addEventListener('click',begin);beginButton.disabled=false;beginButton.removeAttribute('aria-busy');

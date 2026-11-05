@@ -4,11 +4,11 @@
 export const SHORE_REGION=Object.freeze({id:'shore',name:'凪の浜',en:'THE QUIET SHORE',track:'shore',sky:[[.77,.824,.815],[.663,.758,.785]]});
 export const REGIONS=Object.freeze([
  {id:'avenue',name:'道のむこうの並木',en:'THE AVENUE BEYOND',x:2,z:12,r:7,track:'avenue',sky:[[.83,.85,.79],[.66,.77,.79]]},
- {id:'greenhouse',name:'硝子の温室',en:'THE GLASS HOUSE',x:-16,z:9,r:9,track:'greenhouse',sky:[[.80,.85,.78],[.64,.77,.76]]},
+ {id:'greenhouse',name:'硝子の温室',en:'THE GLASS HOUSE',x:-22,z:11,r:10,track:'greenhouse',sky:[[.80,.85,.78],[.64,.77,.76]]},
  {id:'shallows',name:'空を映す浅瀬',en:'THE SKY SHALLOWS',x:-33,z:22,r:12,track:'shallows',sky:[[.81,.87,.88],[.60,.76,.86]]},
- {id:'skyvillage',name:'空の集落',en:'THE SKY HAMLET',x:20,z:-12,r:10,track:'skyvillage',sky:[[.79,.86,.88],[.55,.72,.85]]},
- {id:'windmill',name:'かざぐるまの丘',en:'THE PINWHEEL HILL',x:-19,z:-18,r:9,track:'windmill',sky:[[.81,.84,.76],[.65,.76,.77]]},
- {id:'windgate',name:'風鳴りの門',en:'THE SINGING GATE',x:-10,z:-30,r:6,track:'windgate',sky:[[.72,.77,.78],[.55,.63,.69]]},
+ {id:'skyvillage',name:'空の集落',en:'THE SKY HAMLET',x:16,z:-15,r:11,track:'skyvillage',sky:[[.79,.86,.88],[.55,.72,.85]]},
+ {id:'windmill',name:'かざぐるまの丘',en:'THE PINWHEEL HILL',x:-19,z:-22,r:10,track:'windmill',sky:[[.81,.84,.76],[.65,.76,.77]]},
+ {id:'windgate',name:'風鳴りの門',en:'THE SINGING GATE',x:-8,z:-29,r:7,track:'windgate',sky:[[.72,.77,.78],[.55,.63,.69]]},
  {id:'grassroad',name:'風の草原街道',en:'THE WINDING MEADOW ROAD',x:13,z:-48,r:6,track:'grassroad',sky:[[.80,.85,.79],[.62,.75,.80]]},
  {id:'waterside',name:'柳の水辺',en:'THE WILLOW WATER',x:25,z:-49,r:6,track:'waterside',sky:[[.81,.80,.84],[.66,.70,.80]]},
  {id:'riverbank',name:'日曜の岸辺',en:'A SUNDAY SHORE',x:40,z:-58,r:7,track:'riverbank',sky:[[.85,.84,.76],[.66,.75,.80]]},

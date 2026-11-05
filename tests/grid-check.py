@@ -69,7 +69,7 @@ with sync_playwright() as pw:
 
  page=browser.new_page(viewport={'width':1280,'height':800});page.on('pageerror',lambda e:errors.append(str(e)));install(page)
  page.goto(base,wait_until='networkidle');page.wait_for_function('!!window.nagi && !!nagi.grid && !!window._gridQA',timeout=30000)
- assert page.evaluate('nagi.grid.cell')==6
+ assert page.evaluate('nagi.grid.cell')==7.5
  # Layout: every road cell can be walked both ways (no prop on a road), islanders sit on free cells,
  # and every place name, islander greeting and quiet scene can be reached from the landing.
  assert page.evaluate('_gridQA.roads()')==[]
@@ -129,10 +129,10 @@ with sync_playwright() as pw:
  # Regions (Issue #21): the glass house brings its own music and sky; the shore returns to the home theme.
  page.evaluate('_gridQA.go(0,0)');page.wait_for_function("nagi.region==='shore' && nagi.musicTrack==='shore'",timeout=20000)
  base_sky=page.evaluate('nagi.skyHorizon')
- page.evaluate('([i,j])=>_gridQA.go(i,j)',[round((-16-8)/6),round((9-30)/6)])
+ C=7.5;page.evaluate('([i,j])=>_gridQA.go(i,j)',[round((-22-8)/C),round((11-30)/C)])
  page.wait_for_function("nagi.region==='greenhouse' && nagi.musicTrack==='greenhouse'",timeout=20000)
  page.wait_for_timeout(2500);assert page.evaluate('nagi.skyHorizon')!=base_sky
- for region,(i,j) in {'snowridge':(0,-21),'meadow':(-3,-18),'windgate':(-3,-10)}.items():
+ for region,(i,j) in {name:(round((x-8)/C),round((z-30)/C)) for name,(x,z) in {'snowridge':(6,-98),'meadow':(-12,-79),'windgate':(-8,-29)}.items()}.items():
   page.evaluate(f'_gridQA.go({i},{j})');page.wait_for_function(f"nagi.region==='{region}' && nagi.musicTrack==='{region}'",timeout=20000)
  page.evaluate('_gridQA.go(0,0)');page.wait_for_function("nagi.region==='shore' && nagi.musicTrack==='shore'",timeout=20000)
  assert page.evaluate('nagi.audioState')=='running'
@@ -163,28 +163,31 @@ with sync_playwright() as pw:
  heading,turns,before=grid('heading'),grid('turns'),actions()
  t=time.time();touch('touchStart',195,700,t);touch('touchMove',260,705,t+.08);mobile.wait_for_function(f'nagi.grid.steps+nagi.grid.bumps>{before}',timeout=15000);touch('touchEnd');settle(mobile)
  assert grid('heading')==heading and grid('turns')==turns
- # Held press (one click), then a short slide right: the view looks right, the heading stays; letting go looks ahead again.
+ # Held press (one click), then a short slide right: the view follows the finger, the heading stays; letting go settles.
  clicks=grid('holdClicks')
- t=time.time();touch('touchStart',150,700,t);mobile.wait_for_function(f'nagi.grid.holdClicks>{clicks}',timeout=15000);touch('touchMove',150+60,702,t+.3)
+ t=time.time();touch('touchStart',150,700,t);mobile.wait_for_function(f'nagi.grid.holdClicks>{clicks}',timeout=15000)
+ touch('touchMove',150+30,702,t+.3);touch('touchMove',150+90,702,t+.35)
  mobile.wait_for_function('nagi.grid.look<-.3',timeout=15000)
  assert grid('heading')==heading and grid('turns')==turns and grid('holdClicks')==clicks+1
  touch('touchEnd');mobile.wait_for_function('Math.abs(nagi.grid.look)<.01',timeout=15000);assert grid('heading')==heading
- # Held press, then pull past the look limit: a second click and a quarter turn right, no step.
+ # Held press, then look further than 45 degrees: the heading follows the view (a second, soft tick), with no step.
  clicks,before=grid('holdClicks'),actions()
- t=time.time();touch('touchStart',150,700,t);mobile.wait_for_function(f'nagi.grid.holdClicks>{clicks}',timeout=15000)
- touch('touchMove',150+70,702,t+.3);touch('touchMove',150+160,702,t+.4)
- mobile.wait_for_function(f'nagi.grid.turns>{turns}',timeout=15000);touch('touchEnd');settle(mobile)
- assert grid('heading')==(heading+1)%4 and grid('turns')==turns+1 and grid('holdClicks')==clicks+2 and actions()==before
+ t=time.time();touch('touchStart',120,700,t);mobile.wait_for_function(f'nagi.grid.holdClicks>{clicks}',timeout=15000)
+ touch('touchMove',120+30,702,t+.3);touch('touchMove',120+30+130,702,t+.4)
+ mobile.wait_for_function(f'nagi.grid.turns>{turns}',timeout=15000)
+ # ...and sliding up as well walks the way the eyes now face.
+ touch('touchMove',120+30+130,640,t+.6);mobile.wait_for_function(f'nagi.grid.steps+nagi.grid.bumps>{before}',timeout=15000);touch('touchEnd');settle(mobile)
+ assert grid('heading')==(heading+1)%4 and grid('turns')==turns+1 and grid('holdClicks')>=clicks+2
  # A quick downward flick steps back once, facing unchanged; holding on does not repeat it.
  heading,before=grid('heading'),actions()
  t=time.time();touch('touchStart',195,640,t);touch('touchMove',195,700,t+.08);mobile.wait_for_function(f'nagi.grid.steps+nagi.grid.bumps>{before}',timeout=15000)
  mobile.wait_for_timeout(1500);touch('touchEnd');settle(mobile)
  assert actions()==before+1 and grid('heading')==heading
- # Held press then slide down: turns right round once, no step.
+ # Held press then slide down is a step back as well: nothing turns you round by accident.
  turns,before,clicks=grid('turns'),actions(),grid('holdClicks')
  t=time.time();touch('touchStart',195,640,t);mobile.wait_for_function(f'nagi.grid.holdClicks>{clicks}',timeout=15000);touch('touchMove',195,700,t+.3)
- mobile.wait_for_function(f'nagi.grid.turns>{turns}',timeout=15000);mobile.wait_for_timeout(1500);touch('touchEnd');settle(mobile)
- assert grid('heading')==(heading+2)%4 and grid('turns')==turns+1 and actions()==before
+ mobile.wait_for_function(f'nagi.grid.steps+nagi.grid.bumps>{before}',timeout=15000);mobile.wait_for_timeout(1500);touch('touchEnd');settle(mobile)
+ assert grid('heading')==heading and grid('turns')==turns and actions()==before+1
  # Held press then slide up: strolls forward, facing unchanged.
  heading,before,clicks=grid('heading'),actions(),grid('holdClicks')
  t=time.time();touch('touchStart',195,700,t);mobile.wait_for_function(f'nagi.grid.holdClicks>{clicks}',timeout=15000);touch('touchMove',195,640,t+.3)
@@ -204,4 +207,4 @@ with sync_playwright() as pw:
  mobile.screenshot(path=str(root/'grid-mobile.png'))
  assert not errors,errors
  browser.close()
-print('default grid mode: regional music and sky, grid layout, single and gliding steps, quarter turns, side-step flicks, hold click, look-around and turn, about-face, stroll, shore bumps, automap and touch passed')
+print('default grid mode: regional music and sky, grid layout, single and gliding steps, quarter turns, side-step flicks, hold click, continuous look that re-aims the heading, look-and-walk, stroll, shore bumps, automap and touch passed')
