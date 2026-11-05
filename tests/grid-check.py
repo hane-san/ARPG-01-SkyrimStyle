@@ -102,6 +102,12 @@ with sync_playwright() as pw:
  for key in ['d','a','s','w']:expect_step(page,key)
  assert page.evaluate('nagi.grid.heading')==(h+1)%4
  page.keyboard.press('ArrowLeft');settle(page);assert page.evaluate('nagi.grid.heading')==h
+ # The drawn view never jumps while turning, including through north (a full-circle snap flashed one wrong frame).
+ page.evaluate("window._yaws=[];(function sample(){_yaws.push(nagi.camera.yaw);if(_yaws.length<100000)requestAnimationFrame(sample);})()")
+ for key in ['e','e','e','e','e','q','q','q','q','q']:page.keyboard.press(key);settle(page)
+ yaws=page.evaluate('_yaws');page.evaluate('_yaws.length=100000')
+ assert len(yaws)>20 and max(abs(b-a) for a,b in zip(yaws,yaws[1:]))<1,max(abs(b-a) for a,b in zip(yaws,yaws[1:]))
+ assert page.evaluate('nagi.grid.heading')==h
  # Walking on until the sea or a prop: a bump neither moves nor adds a footstep.
  before=page.evaluate('nagi.grid.bumps');page.keyboard.down('w');page.wait_for_function(f'nagi.grid.bumps>{before}',timeout=60000)
  # Holding on against the wall bumps once only: no repeated nudge that reads as camera shake.

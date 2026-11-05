@@ -3,7 +3,7 @@ const {CRUISE_SPEED,footStride,nearPlaneMargin,CollisionWorld,circleCollider,box
 const {journeyScenes,landscapeColor,readingSeconds,JourneyNotices}=await import('./journey.js'+new URL(import.meta.url).search);
 const {REGIONS,SHORE_REGION,RegionTracker}=await import('./regions.js'+new URL(import.meta.url).search);
 const {RegionMusic}=await import('./music.js'+new URL(import.meta.url).search);
-const {ONE_SHOT,CELL,GRID_ORIGIN,STEP_SECONDS,QUICK_STEP_SECONDS,HEADING_NAMES,GridWalker,GridGesture,keyCommand,automapCells,gridRoute,gridCells}=await import('./grid.js'+new URL(import.meta.url).search);
+const {ONE_SHOT,TURN_COMMANDS,CELL,GRID_ORIGIN,STEP_SECONDS,QUICK_STEP_SECONDS,HEADING_NAMES,GridWalker,GridGesture,keyCommand,automapCells,gridRoute,gridCells}=await import('./grid.js'+new URL(import.meta.url).search);
 // Dungeon-crawler travel is the default (producer decision 2026-11-04): the same island, one grid cell at a time.
 // ?grid=0 keeps the earlier free walking for comparison and its regression checks.
 const GRID_MODE=new URLSearchParams(location.search).get('grid')!=='0';
@@ -518,7 +518,9 @@ for(const scene of scenes){
 let vignetteSeed=40213;const vrnd=(a,b)=>{vignetteSeed=(1664525*vignetteSeed+1013904223)>>>0;return a+(b-a)*vignetteSeed/4294967296;};
 const spot=(x,z)=>GRID_MODE?claimCell(x,z,true):[x,z];
 // Paint on the sea floats just above the highest wave (0.1 m) so the moving surface never cuts through it.
-const SEA_PAINT=.12,seaDisc=(x,z,r,col,sides=8)=>{for(let k=0;k<sides;k++){const a=k/sides*Math.PI*2,b=(k+1)/sides*Math.PI*2;tri([x,SEA_PAINT,z],[x+Math.cos(a)*r,SEA_PAINT,z+Math.sin(a)*r],[x+Math.cos(b)*r,SEA_PAINT,z+Math.sin(b)*r],col);}};
+const SEA_PAINT=.12;
+// Discs never overlap one another either: two coplanar paints fighting for the same pixel would flicker too.
+const seaPainted=[],seaDisc=(x,z,r,col,sides=8)=>{if(seaPainted.some(([a,b,q])=>Math.hypot(a-x,b-z)<q+r+.1))return;seaPainted.push([x,z,r]);for(let k=0;k<sides;k++){const a=k/sides*Math.PI*2,b=(k+1)/sides*Math.PI*2;tri([x,SEA_PAINT,z],[x+Math.cos(a)*r,SEA_PAINT,z+Math.sin(a)*r],[x+Math.cos(b)*r,SEA_PAINT,z+Math.sin(b)*r],col);}};
 const flatDisc=(x,z,r,lift,col,sides=10)=>{for(let k=0;k<sides;k++){const a=k/sides*Math.PI*2,b=(k+1)/sides*Math.PI*2,p=(t)=>[x+Math.cos(t)*r,height(x+Math.cos(t)*r,z+Math.sin(t)*r)+lift,z+Math.sin(t)*r];tri([x,height(x,z)+lift,z],p(a),p(b),col);}};
 // 1. The avenue beyond: slender poplars frame the landing road and lead the eye to the bright distance.
 for(const [x,z] of avenueSpots){const y=height(x,z);branch([x,y,z],[x,y+3.4,z],.13,pal.bark);sphere(x,y+4.4,z,.95,2.7,.95,hex('8ea58c'),8,5);sphere(x+.2,y+5.6,z-.1,.6,1.4,.6,hex('9db39a'),7,4);addCircle(x,z,.14,'tree');}
@@ -621,7 +623,8 @@ sceneryBatch(3,14,16);
 {
  for(const [wx,wz] of [[26,-51],[21.5,-46.5],[30.5,-51]]){const p=spot(wx,wz);if(!p)continue;const [x,z]=p,y=height(x,z);branch([x,y,z],[x+.2,y+3.3,z],.16,pal.bark);sphere(x+.2,y+3.6,z,1.3,.7,1.3,hex('9fb59a'),8,4);
   for(let k=0;k<16;k++){const a=k/16*Math.PI*2,r=vrnd(.8,1.5),top=[x+.2+Math.cos(a)*r*.6,y+3.7,z+Math.sin(a)*r*.6];branch(top,[x+.2+Math.cos(a)*r,y+vrnd(1,1.8),z+Math.sin(a)*r],.035,k%3?hex('a9bf98'):hex('b9b7cf'));}addCircle(x,z,.25,'willow');}
- for(let i=0;i<40;i++){const x=vrnd(28,44),z=vrnd(-53,-41);if(height(x,z)>-.35)continue;seaDisc(x,z,vrnd(.5,1.3),[hex('cfc7df'),hex('bcd6d1'),hex('dccbd2'),hex('c3d7b6')][i%4],7);}
+ // Painted, not mirrored: small patches only a step away from the sea's own colour.
+ for(let i=0;i<40;i++){const x=vrnd(28,44),z=vrnd(-53,-41);if(height(x,z)>-.35)continue;seaDisc(x,z,vrnd(.4,.9),tintBlend(hex('a5c2be'),[hex('cfc7df'),hex('bcd6d1'),hex('dccbd2'),hex('c3d7b6')][i%4],.55),7);}
  sceneryBatch(32,-48,18);
 }
 // 11. A Sunday shore: still figures with parasols, round clipped trees, boats, and ground painted in dots.
@@ -631,12 +634,14 @@ sceneryBatch(3,14,16);
  for(const [bx,bz,c] of [[40,-50,pal.pink],[46,-48.5,pal.cream]]){box(bx,.02,bz,.9,.35,2.4,hex('a38f78'));branch([bx,.35,bz],[bx,2.6,bz],.03,pal.bark);tri([bx,.6,bz],[bx,2.5,bz],[bx,.6,bz+1.4],c);}
  const dots=[hex('d9a7a0'),hex('9fb5c9'),hex('e1cf98'),hex('a5c09a'),hex('c4a8cf')];
  sceneryBatch(40,-58,16);
- for(let i=0;i<700;i++){const x=vrnd(32,47),z=vrnd(-66,-56),y=height(x,z);if(y<.5||routeDistance(x,z)<1.7)continue;const d=.09;quad([x-d,y+.03,z-d],[x+d,y+.03,z-d],[x+d,y+.03,z+d],[x-d,y+.03,z+d],dots[i%5]);}
+ // Dots on a jittered lattice: they never overlap, so no two coplanar colours fight for a pixel.
+ for(let gx=32;gx<47;gx+=.5)for(let gz=-66;gz<-56;gz+=.5){if(vrnd(0,1)<.45)continue;const x=gx+vrnd(.1,.4),z=gz+vrnd(.1,.4),y=height(x,z);if(y<.5||routeDistance(x,z)<1.7)continue;const d=.09;quad([x-d,y+.03,z-d],[x+d,y+.03,z-d],[x+d,y+.03,z+d],[x-d,y+.03,z+d],dots[(((gx*2+gz*6)|0)%5+5)%5]);}
  sceneryBatch(40,-61,12,true);
 }
 // 12. The sky shallows: pale plates on the shallow sea either side of the sandbar take the colour of the sky.
 {
- for(let x=-47;x<-16;x+=2.2)for(let z=9;z<35;z+=2.2){const h=height(x+1.1,z+1.1);if(h>-.03||h<-1.9)continue;const c=vrnd(0,1)<.5?hex('cfe1df'):hex('d9e8e5');quad([x,SEA_PAINT,z],[x,SEA_PAINT,z+2.2],[x+2.2,SEA_PAINT,z+2.2],[x+2.2,SEA_PAINT,z],c);}
+ // Soft, round glints rather than tiles: close to the sea colour, paler where the water is shallowest.
+ for(let i=0;i<150;i++){const x=vrnd(-47,-15),z=vrnd(9,35),h=height(x,z);if(h>-.05||h<-1.9)continue;const t=Math.min(1,-h/1.9),c=[.81-.04*t,.88-.03*t,.87-.03*t];seaDisc(x,z,vrnd(.8,2)*(1.2-t*.5),c,9);}
  for(const [px,pz] of [[-38,17],[-27,27],[-42,26]]){branch([px,-.6,pz],[px,1.3,pz],.06,pal.bark);}
  sceneryBatch(-31,22,24);
 }
@@ -687,7 +692,7 @@ let gridGesture=new GridGesture(),pendingCommand=null,keyOrder=[],automapKey=nul
 let started=false,paused=false,muted=false,contextLost=false,time=0,last=performance.now(),gestures=new GestureInput(),keys=new Set(),shownPlaces=new Set(),lastGreetingDistance=null;
 const notices=new JourneyNotices(),seenScenes=new Set(),sceneDwell=new Map();
 const placeNode=document.querySelector('#place'),greetingNode=document.querySelector('#greeting'),travelBook=document.querySelector('#travel-book');
-let noticeContent=null,paintedNotice=null,previousMovement=false;
+let noticeContent=null,paintedNotice=null,previousMovement=false,stillFor=1;
 function resize(){const d=Math.min(devicePixelRatio||1,1.5),w=Math.round(innerWidth*d),h=Math.round(innerHeight*d);if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;gl.viewport(0,0,w,h);}}addEventListener('resize',resize);resize();
 function vp(){const f=1/Math.tan(CAMERA_FOV*Math.PI/360),aspect=canvas.width/canvas.height,n=CAMERA_NEAR,far=2600,proj=[f/aspect,0,0,0,0,f,0,0,0,0,(far+n)/(n-far),-1,0,0,2*far*n/(n-far),0];const c=Math.cos(camera.yaw),s=Math.sin(camera.yaw),view=[c,0,s,0,0,1,0,0,-s,0,c,0,-c*camera.x+s*camera.z,-camera.y,-s*camera.x-c*camera.z,1],out=new Float32Array(16);for(let j=0;j<4;j++)for(let i=0;i<4;i++){let v=0;for(let k=0;k<4;k++)v+=proj[k*4+i]*view[j*4+k];out[j*4+i]=v;}return out;}
 const DRAW_ORIGIN=[0,0,0],WORLD_SCENERY_BOUNDS={x:0,z:-25,r:100},CAMERA_AXES=['x','y','z','yaw'];
@@ -757,12 +762,14 @@ function gridUpdate(dt){
  // Letting go (or changing direction) mid-step slows to a stop on the cell being entered.
  if(held!==activeCommand)walker.easeOut();
  walker.update(dt);
- if(!walker.busy){
-  const fresh=pendingCommand,command=fresh||held;pendingCommand=null;activeCommand=command;
+ if(!walker.action){
+  const fresh=pendingCommand,command=fresh||held;
+  // A fresh press that arrives during the short pause after a turn waits for it, rather than being dropped.
+  if(!(command&&TURN_COMMANDS.has(command)&&walker.cooldown>0)){pendingCommand=null;activeCommand=command;}
   // Holding against a wall bumps once, not over and over: a repeated nudge reads as camera shake.
   // A fresh press, a turn or a new direction may bump again.
   const where=walker.i+','+walker.j+','+walker.heading;
-  if(command&&!(command===bumpedCommand&&where===bumpedAt&&!fresh)){
+  if(command&&!(TURN_COMMANDS.has(command)&&walker.cooldown>0)&&!(command===bumpedCommand&&where===bumpedAt&&!fresh)){
    // One-shot touch commands (a step back, an about-face) act once per slide and always ease to a stop.
    const result=walker.command(command,{quick:keys.has('ShiftLeft')||keys.has('ShiftRight'),hold:command===held&&!(gridGesture.held&&ONE_SHOT.has(command))});
    if(result&&!fresh&&gridGesture.held)gridGesture.take(command);
@@ -807,7 +814,9 @@ function update(dt){
    if(dwell>1.6&&showNotice('scene',scene.id,scene.name,scene.words,readingSeconds(scene.words)))seenScenes.add(scene.id);
   }else sceneDwell.delete(scene.id);
  }
- const moving=player.actualSpeed>1;
+ // The quiet travelling state lingers 0.8 s, so the travel-book button does not blink between single steps.
+ stillFor=player.actualSpeed>1?0:stillFor+dt;
+ const moving=stillFor<.8;
  if(moving!==previousMovement){previousMovement=moving;document.body.classList.toggle('travelling',moving);}
  paintNotices();
 }
@@ -816,6 +825,8 @@ function frame(now){
  if(contextLost)return;
  const dt=clamp((now-last)/1000,0,1/15);last=now;
  if(started&&!paused){accumulator+=dt;const step=1/60;while(accumulator>=step){previous.x=player.x;previous.y=player.y;previous.z=player.z;previous.yaw=player.yaw;time+=step;update(step);accumulator-=step;}
+  // A yaw that moved by more than half a turn in one step is a reset, never a motion to interpolate through.
+  if(Math.abs(player.yaw-previous.yaw)>Math.PI)previous.yaw=player.yaw;
   const alpha=accumulator/step;for(const k of CAMERA_AXES)camera[k]=previous[k]+(player[k]-previous[k])*alpha;
  }else if(!started){time+=dt;resetCameraHistory();}
  render();requestAnimationFrame(frame);
@@ -972,7 +983,7 @@ const automap=document.querySelector('#automap'),automapCtx=automap?.getContext(
 const npcCells=npcs.map(n=>cellIndex(n.x,n.z));
 function drawAutomap(){
  if(!walker||!automapCtx)return;
- const key=walker.i+','+walker.j+','+walker.heading+','+walker.visited.size+','+automapShown+','+innerWidth+'x'+innerHeight;
+ const key=walker.i+','+walker.j+','+walker.heading+','+Math.round(walker.yaw*40)+','+walker.visited.size+','+automapShown+','+innerWidth+'x'+innerHeight;
  if(key===automapKey)return;automapKey=key;
  automap.hidden=!automapShown;if(!automapShown)return;
  const size=automap.clientWidth||148,ratio=Math.min(devicePixelRatio||1,2),radius=6,unit=size/(radius*2+1);
@@ -1002,7 +1013,7 @@ function drawAutomap(){
   if(seen){c.beginPath();c.arc((i-walker.i+radius+.5)*unit,(j-walker.j+radius+.5)*unit,unit*.3,0,Math.PI*2);c.fill();}
  }
  const cx=(radius+.5)*unit,cy=(radius+.5)*unit;
- c.save();c.translate(cx,cy);c.rotate(walker.heading*Math.PI/2);c.beginPath();c.moveTo(0,-unit*.78);c.lineTo(unit*.58,unit*.52);c.lineTo(0,unit*.22);c.lineTo(-unit*.58,unit*.52);c.closePath();
+ c.save();c.translate(cx,cy);c.rotate(-walker.yaw);c.beginPath();c.moveTo(0,-unit*.78);c.lineTo(unit*.58,unit*.52);c.lineTo(0,unit*.22);c.lineTo(-unit*.58,unit*.52);c.closePath();
  c.fillStyle='#f6b26b';c.fill();c.lineWidth=1.5;c.strokeStyle='#263a34';c.stroke();c.restore();
  c.font='bold 11px sans-serif';c.textAlign='center';c.textBaseline='top';c.fillStyle='#f3f0e2';c.fillText('N',size/2,3);
  c.textAlign='left';c.fillText(HEADING_NAMES[walker.heading],5,3);

@@ -167,3 +167,19 @@ test('a bump is a small, soft nudge that returns exactly to the cell',()=>{
  while(w.action){w.update(1/120);far=Math.max(far,-w.z);}
  assert.ok(far>.05&&far<=.13,far);assert.equal(w.z,0);
 });
+
+test('turning never jumps the view: the yaw moves smoothly through every quarter, north included',()=>{
+ const w=new GridWalker(flat(),{origin:[0,0]});let prev=w.yaw,jump=0;
+ for(const c of ['turnRight','turnRight','turnRight','turnRight','turnRight','turnLeft','turnLeft','turnLeft','turnLeft','turnLeft','turnLeft','turnAround','turnAround','turnAround']){
+  assert.equal(w.command(c),'turn');while(w.busy){w.update(1/60);jump=Math.max(jump,Math.abs(w.yaw-prev));prev=w.yaw;}
+  assert.equal(nearestHeading(w.yaw),w.heading);
+ }
+ // The fastest a smootherstep quarter can move in one 60 Hz frame is about 0.09 rad; a full-circle snap was 6.28.
+ assert.ok(jump<.12,jump);
+});
+
+test('a step can start right after a turn; only a repeated turn waits',()=>{
+ const w=new GridWalker(flat(),{origin:[0,0]});
+ w.command('turnRight');while(w.action)w.update(1/60);
+ assert.ok(w.cooldown>0);assert.equal(w.command('turnRight'),null);assert.equal(w.command('forward'),'step');
+});
