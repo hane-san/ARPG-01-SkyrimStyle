@@ -8,7 +8,6 @@ export const HEADINGS=Object.freeze([[0,-1],[1,0],[0,1],[-1,0]]);
 export const HEADING_NAMES=Object.freeze(['北','東','南','西']);
 export const headingYaw=h=>-((h%4+4)%4)*Math.PI/2;
 export function nearestHeading(yaw){return ((Math.round(-yaw/(Math.PI/2))%4)+4)%4;}
-const wrapQuarterAngle=a=>Math.atan2(Math.sin(a),Math.cos(a));
 // Smootherstep: zero velocity and acceleration at both ends, so a quarter turn starts and settles softly.
 const turnEase=t=>t*t*t*(t*(6*t-15)+10);
 // Cubic Hermite from 0 to 1 with start/end slopes m0/m1 (in units of the whole move per duration).
@@ -16,6 +15,7 @@ export function hermite(w,m0,m1){const w2=w*w,w3=w2*w;return (w3-2*w2+w)*m0+(-2*
 export function hermiteSlope(w,m0,m1){return (3*w*w-4*w+1)*m0+(6*w-6*w*w)+(3*w*w-2*w)*m1;}
 export const COMMANDS=Object.freeze(['forward','back','strafeLeft','strafeRight','turnLeft','turnRight','turnAround']);
 // Touch commands that act once per slide rather than repeating while the finger is held.
+export const TURN_COMMANDS=Object.freeze(new Set(['turnLeft','turnRight','turnAround']));
 export const ONE_SHOT=Object.freeze(new Set(['back','turnAround']));
 // Movement direction relative to the current heading, in quarter turns.
 const MOVE_OFFSET={forward:0,strafeRight:1,back:2,strafeLeft:3};
@@ -51,12 +51,15 @@ export class GridWalker {
  // Starts a command. Returns 'step', 'turn', 'blocked', or null while a previous action is still playing.
  // hold: the input is still held, so the step leaves its cell at full speed instead of slowing to a stop.
  command(name,{quick=false,hold=false}={}){
-  if(this.busy||!COMMANDS.includes(name))return null;
+  // The pause after a turn only spaces out repeated turns: a step may start straight away.
+  if(this.action!==null||!COMMANDS.includes(name)||(this.cooldown>0&&TURN_COMMANDS.has(name)))return null;
   const carry=this.carry;this.carry=null;
   if(name==='turnLeft'||name==='turnRight'||name==='turnAround'){
    const quarters=name==='turnRight'?1:name==='turnLeft'?-1:2,from=this.yaw;
    // An about-face always turns to the right, through a full half turn.
-   const delta=quarters===2?-Math.PI:wrapQuarterAngle(headingYaw(this.heading+quarters)-from);
+   // The yaw stays continuous (it may pass beyond ±2π): snapping it back to headingYaw() at the end of a turn
+   // jumped a full circle, and the camera, interpolating between frames, drew one frame facing elsewhere.
+   const delta=-quarters*Math.PI/2;
    this.heading=(this.heading+quarters+4)%4;this.turns++;
    this.action={kind:'turn',t:0,duration:quarters===2?TURN_AROUND_SECONDS:TURN_SECONDS,fromYaw:from,deltaYaw:delta};return 'turn';
   }
@@ -109,7 +112,7 @@ export class GridWalker {
   if(a.kind==='step'){this.travelled=Math.hypot(this.x-px,this.z-pz);this.speed=this.travelled/dt;}
   if(a.t<a.duration)return null;
   // Land exactly on the grid: no accumulated drift after hundreds of steps.
-  if(a.kind==='turn'){this.yaw=headingYaw(this.heading);this.cooldown=TURN_REPEAT_PAUSE;}
+  if(a.kind==='turn'){this.yaw=Math.round((a.fromYaw+a.deltaYaw)/(Math.PI/2))*(Math.PI/2);this.cooldown=TURN_REPEAT_PAUSE;}
   else[this.x,this.z]=this.center(this.i,this.j);
   if(a.kind==='step'&&a.m1>0)this.carry={dx:a.dx,dz:a.dz,speed:(1-a.s0)*a.m1*this.cell/a.duration,spare:Math.max(0,spare),frame:dt};
   this.action=null;return a.kind;
