@@ -155,27 +155,41 @@ with sync_playwright() as pw:
  t=time.time();touch('touchStart',195,700,t);touch('touchEnd',at=t+.6);settle(mobile);assert actions()==1
  touch('touchStart',195,700);touch('touchMove',195,640);mobile.wait_for_function('nagi.grid.steps+nagi.grid.bumps>=2',timeout=15000);mobile.wait_for_timeout(800);touch('touchEnd');settle(mobile)
  done=actions();mobile.wait_for_timeout(600);assert actions()==done
- turns=mobile.evaluate('nagi.grid.turns')
- t=time.time();touch('touchStart',195,700,t);touch('touchMove',260,705,t+.08);mobile.wait_for_function(f'nagi.grid.turns>{turns}',timeout=15000);touch('touchEnd');settle(mobile)
- assert actions()==done
- # Held press: it clicks once when it arms; then a sideways slide side-steps one cell at a time, facing unchanged.
- heading=mobile.evaluate('nagi.grid.heading');turns=mobile.evaluate('nagi.grid.turns');clicks=mobile.evaluate('nagi.grid.holdClicks')
- t=time.time();touch('touchStart',195,700,t);mobile.wait_for_function(f'nagi.grid.holdClicks>{clicks}',timeout=15000);touch('touchMove',270,702,t+.3)
- mobile.wait_for_function(f'nagi.grid.steps+nagi.grid.bumps>={done+1}',timeout=15000);mobile.wait_for_timeout(800);touch('touchEnd');settle(mobile)
- assert mobile.evaluate('nagi.grid.turns')==turns and mobile.evaluate('nagi.grid.heading')==heading and mobile.evaluate('nagi.grid.holdClicks')==clicks+1
- # A quick downward flick turns right round, once, without a step.
- turns=mobile.evaluate('nagi.grid.turns');before=actions()
- t=time.time();touch('touchStart',195,640,t);touch('touchMove',195,700,t+.08)
- mobile.wait_for_function(f'nagi.grid.turns>{turns}',timeout=15000);mobile.wait_for_timeout(1500);touch('touchEnd');settle(mobile)
- assert mobile.evaluate('nagi.grid.heading')==(heading+2)%4 and mobile.evaluate('nagi.grid.turns')==turns+1 and actions()==before
- # Held press then slide down: steps back, still facing the same way.
- heading=mobile.evaluate('nagi.grid.heading');before=actions();clicks=mobile.evaluate('nagi.grid.holdClicks')
+ grid=lambda key:mobile.evaluate('nagi.grid.'+key)
+ # A quick sideways flick side-steps, facing unchanged (holding on would go on one cell at a time).
+ heading,turns,before=grid('heading'),grid('turns'),actions()
+ t=time.time();touch('touchStart',195,700,t);touch('touchMove',260,705,t+.08);mobile.wait_for_function(f'nagi.grid.steps+nagi.grid.bumps>{before}',timeout=15000);touch('touchEnd');settle(mobile)
+ assert grid('heading')==heading and grid('turns')==turns
+ # Held press (one click), then a short slide right: the view looks right, the heading stays; letting go looks ahead again.
+ clicks=grid('holdClicks')
+ t=time.time();touch('touchStart',150,700,t);mobile.wait_for_function(f'nagi.grid.holdClicks>{clicks}',timeout=15000);touch('touchMove',150+60,702,t+.3)
+ mobile.wait_for_function('nagi.grid.look<-.3',timeout=15000)
+ assert grid('heading')==heading and grid('turns')==turns and grid('holdClicks')==clicks+1
+ touch('touchEnd');mobile.wait_for_function('Math.abs(nagi.grid.look)<.01',timeout=15000);assert grid('heading')==heading
+ # Held press, then pull past the look limit: a second click and a quarter turn right, no step.
+ clicks,before=grid('holdClicks'),actions()
+ t=time.time();touch('touchStart',150,700,t);mobile.wait_for_function(f'nagi.grid.holdClicks>{clicks}',timeout=15000)
+ touch('touchMove',150+70,702,t+.3);touch('touchMove',150+160,702,t+.4)
+ mobile.wait_for_function(f'nagi.grid.turns>{turns}',timeout=15000);touch('touchEnd');settle(mobile)
+ assert grid('heading')==(heading+1)%4 and grid('turns')==turns+1 and grid('holdClicks')==clicks+2 and actions()==before
+ # A quick downward flick steps back once, facing unchanged; holding on does not repeat it.
+ heading,before=grid('heading'),actions()
+ t=time.time();touch('touchStart',195,640,t);touch('touchMove',195,700,t+.08);mobile.wait_for_function(f'nagi.grid.steps+nagi.grid.bumps>{before}',timeout=15000)
+ mobile.wait_for_timeout(1500);touch('touchEnd');settle(mobile)
+ assert actions()==before+1 and grid('heading')==heading
+ # Held press then slide down: turns right round once, no step.
+ turns,before,clicks=grid('turns'),actions(),grid('holdClicks')
  t=time.time();touch('touchStart',195,640,t);mobile.wait_for_function(f'nagi.grid.holdClicks>{clicks}',timeout=15000);touch('touchMove',195,700,t+.3)
+ mobile.wait_for_function(f'nagi.grid.turns>{turns}',timeout=15000);mobile.wait_for_timeout(1500);touch('touchEnd');settle(mobile)
+ assert grid('heading')==(heading+2)%4 and grid('turns')==turns+1 and actions()==before
+ # Held press then slide up: strolls forward, facing unchanged.
+ heading,before,clicks=grid('heading'),actions(),grid('holdClicks')
+ t=time.time();touch('touchStart',195,700,t);mobile.wait_for_function(f'nagi.grid.holdClicks>{clicks}',timeout=15000);touch('touchMove',195,640,t+.3)
  mobile.wait_for_function(f'nagi.grid.steps+nagi.grid.bumps>{before}',timeout=15000);touch('touchEnd');settle(mobile)
- assert actions()>before and mobile.evaluate('nagi.grid.heading')==heading
+ assert actions()>before and grid('heading')==heading
  # A quick tap never clicks.
- clicks=mobile.evaluate('nagi.grid.holdClicks');t=time.time();touch('touchStart',195,700,t);touch('touchEnd',at=t+.06);settle(mobile)
- assert mobile.evaluate('nagi.grid.holdClicks')==clicks
+ clicks=grid('holdClicks');t=time.time();touch('touchStart',195,700,t);touch('touchEnd',at=t+.06);settle(mobile)
+ assert grid('holdClicks')==clicks
  box=mobile.locator('#automap').bounding_box();assert box and box['y']+box['height']<844/2,box
  # The greeting sits clear of the larger map.
  mobile.evaluate("document.querySelector('#greeting').setAttribute('aria-hidden','false')")
@@ -185,4 +199,4 @@ with sync_playwright() as pw:
  mobile.screenshot(path=str(root/'grid-mobile.png'))
  assert not errors,errors
  browser.close()
-print('default grid mode: regional music and sky, grid layout, single and gliding steps, quarter turns, crab walk, hold click, careful steps, about-face flick, shore bumps, automap and touch passed')
+print('default grid mode: regional music and sky, grid layout, single and gliding steps, quarter turns, side-step flicks, hold click, look-around and turn, about-face, stroll, shore bumps, automap and touch passed')
