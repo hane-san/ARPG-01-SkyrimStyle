@@ -104,7 +104,10 @@ with sync_playwright() as pw:
  page.keyboard.press('ArrowLeft');settle(page);assert page.evaluate('nagi.grid.heading')==h
  # The drawn view never jumps while turning, including through north (a full-circle snap flashed one wrong frame).
  page.evaluate("window._yaws=[];(function sample(){_yaws.push(nagi.camera.yaw);if(_yaws.length<100000)requestAnimationFrame(sample);})()")
+ turns0=page.evaluate('nagi.grid.turns')
  for key in ['e','e','e','e','e','q','q','q','q','q']:page.keyboard.press(key);settle(page)
+ # Every press counts, even ones that arrive while a turn is still playing: ten turns land back on the heading.
+ page.wait_for_function(f'nagi.grid.turns>={turns0+10}&&!nagi.grid.busy&&nagi.grid.heading==={h}',timeout=30000);settle(page)
  yaws=page.evaluate('_yaws');page.evaluate('_yaws.length=100000')
  assert len(yaws)>20 and max(abs(b-a) for a,b in zip(yaws,yaws[1:]))<1,max(abs(b-a) for a,b in zip(yaws,yaws[1:]))
  assert page.evaluate('nagi.grid.heading')==h
