@@ -731,7 +731,7 @@ let previous={...camera},accumulator=0;
 function resetCameraHistory(){Object.assign(camera,{x:player.x,y:player.y,z:player.z,yaw:player.yaw});Object.assign(previous,camera);accumulator=0;}
 
 // Fresh presses and taps queue up (at most three) so quick presses are never lost, even mid-step or on a busy frame.
-let gridGesture=new GridGesture(),pendingCommands=[],keyOrder=[],automapKey=null,automapShown=true;
+let gridGesture=new GridGesture(),sideHeld=null,sideActed=false,sidePointer=null,pendingCommands=[],keyOrder=[],automapKey=null,automapShown=true;
 let started=false,paused=false,muted=false,contextLost=false,time=0,last=performance.now(),gestures=new GestureInput(),keys=new Set(),shownPlaces=new Set(),lastGreetingDistance=null;
 const notices=new JourneyNotices(),seenScenes=new Set(),sceneDwell=new Map();
 const placeNode=document.querySelector('#place'),greetingNode=document.querySelector('#greeting'),travelBook=document.querySelector('#travel-book');
@@ -792,10 +792,11 @@ function updateRegion(dt){
  for(let i=0;i<3;i++){skyMood.low[i]+=(region.sky[0][i]-skyMood.low[i])*k;skyMood.high[i]+=(region.sky[1][i]-skyMood.high[i])*k;}
  music?.tick();
 }
-function inputHeld(){return GRID_MODE?gridGesture.held||keys.size>0:gestures.held||keys.size>0;}
+function inputHeld(){return GRID_MODE?gridGesture.held||!!sideHeld||keys.size>0:gestures.held||keys.size>0;}
 // The newest held key wins; a held slide repeats; a buffered press (key or tap) is never lost while a step plays.
 function heldCommand(){
  if(gridGesture.held&&gridGesture.command)return gridGesture.available();
+ if(sideHeld)return sideHeld;
  for(let i=keyOrder.length-1;i>=0;i--){const c=keyCommand(keyOrder[i]);if(c)return c;}
  return null;
 }
@@ -803,12 +804,12 @@ let lookYaw=0,activeCommand=null,bumpedCommand=null,bumpedAt=null;
 function gridUpdate(dt){
  // A still press arms the held mode: a soft click (and a tap of vibration where supported) says so.
  if(gridGesture.arm(performance.now()/1000))holdClick();
- // Looking around: the view follows the finger continuously, like an ordinary 3D game. Whenever it points closer to a
- // neighbouring direction (past 45 degrees, with a little hysteresis), that becomes the heading with a soft tick, and the
- // view stays exactly where it is. Letting go settles the view gently on the heading.
- const looking=gridGesture.look!==0||gridGesture.command==='look';
+ // Looking around (D016): the view follows the finger, up to 120 degrees either way, and only the view: the heading
+ // never changes by looking. Letting go settles the view gently back on the heading.
+ const looking=gridGesture.command==='look';
  lookYaw+=(-gridGesture.look*Math.PI/2-lookYaw)*(1-Math.exp(-dt*(looking?20:6)));
- if(Math.abs(lookYaw)>Math.PI/4+.04){const q=lookYaw<0?1:-1;if(walker.reaim(q)){lookYaw+=q*Math.PI/2;gridGesture.shiftLook(q);holdClick();}}
+ // Settled means settled: the easing would otherwise creep toward zero forever.
+ if(!looking&&Math.abs(lookYaw)<1e-4)lookYaw=0;
  const held=heldCommand();
  // Letting go (or changing direction) mid-step slows to a stop on the cell being entered.
  if(held!==activeCommand)walker.easeOut();
@@ -821,14 +822,13 @@ function gridUpdate(dt){
   // A fresh press, a turn or a new direction may bump again.
   const where=walker.i+','+walker.j+','+walker.heading;
   if(command&&!(TURN_COMMANDS.has(command)&&walker.cooldown>0)&&!(command===bumpedCommand&&where===bumpedAt&&!fresh)){
-   // One-shot touch commands (a step back, an about-face) act once per slide and always ease to a stop.
-   // A held press then slide walks carefully: one eased cell at a time with a short rest, never a glide.
-   // Flicked side-steps and steps back are single eased cells; the held-press walk forward strolls without stopping.
-   // Touch: side-steps glide on while held, a step back is one eased cell, the held-press walk strolls without stopping.
-   const fromGesture=!fresh&&gridGesture.held&&command===gridGesture.available();
-   const side=fromGesture&&(command==='strafeLeft'||command==='strafeRight'),slow=fromGesture&&command==='back',stroll=fromGesture&&gridGesture.careful&&command==='forward';
-   const result=walker.command(command,{quick:keys.has('ShiftLeft')||keys.has('ShiftRight'),slow,side,stroll,hold:command===held&&!slow&&!(fromGesture&&ONE_SHOT.has(command))});
+   // Touch walks deliberately (D016): every touch step, and the side-step buttons, is one eased cell with a short rest,
+   // so holding on walks cell by cell rather than gliding. Flicked turns and steps back act once per slide.
+   const fromGesture=!fresh&&gridGesture.held&&command===gridGesture.available(),fromSide=!fresh&&!fromGesture&&sideHeld===command;
+   const slow=(fromGesture||fromSide)&&!TURN_COMMANDS.has(command);
+   const result=walker.command(command,{quick:keys.has('ShiftLeft')||keys.has('ShiftRight'),slow,hold:command===held&&!slow&&!(fromGesture&&ONE_SHOT.has(command))});
    if(result&&!fresh&&gridGesture.held)gridGesture.take(command);
+   if(result&&fromSide)sideActed=true;
    if(result==='step'){const [x,z]=walker.center(walker.i,walker.j);footstep(surfaceAt(x,z),CELL/STEP_SECONDS);}
    if(result==='blocked'){bumpedCommand=command;bumpedAt=where;}else if(result){bumpedCommand=null;}
   }
@@ -889,7 +889,7 @@ function frame(now){
 }requestAnimationFrame(frame);
 
 // Grid mode: input is cleared, and a step already under way lands on its cell (at most 0.21 s); nothing repeats.
-function stopMovement(){if(GRID_MODE){pendingCommands=[];keyOrder=[];return;}resetMotion(player);resetCameraHistory();footDistance=0;feetMoving=false;}
+function stopMovement(){if(GRID_MODE){pendingCommands=[];keyOrder=[];sideHeld=null;sidePointer=null;for(const b of document.querySelectorAll('.side-step'))b.classList.remove('pressed');return;}resetMotion(player);resetCameraHistory();footDistance=0;feetMoving=false;}
 function settleInput(){
  if(GRID_MODE)return;
  const i=readMovementInput(gestures.held?gestures.value:null,keys);
@@ -914,7 +914,7 @@ canvas.addEventListener('pointermove',e=>{
  if(gestures.move(e))e.preventDefault();else if(wasHeld&&!gestures.held)settleInput();
 });
 function finishPointer(e){
- if(GRID_MODE){const owner=gridGesture.id,result=gridGesture.end(e,e.timeStamp/1000);if(result){if(result==='tap'&&started&&!paused&&pendingCommands.length<3)pendingCommands.push('forward');releaseCapture(owner);}return;}
+ if(GRID_MODE){const owner=gridGesture.id,result=gridGesture.end(e,e.timeStamp/1000);if(result){const queued=result==='tap'?'forward':typeof result==='string'?result:null;if(queued&&started&&!paused&&pendingCommands.length<3)pendingCommands.push(queued);releaseCapture(owner);}return;}
  const owner=gestures.id;if(gestures.end(e)){settleInput();releaseCapture(owner);}
 }
 // Capture-phase window listeners also see releases outside the canvas after capture was lost.
@@ -1083,11 +1083,29 @@ function drawAutomap(){
 }
 if(GRID_MODE){
  document.body.classList.add('grid-mode');
- canvas.setAttribute('aria-label',canvas.getAttribute('aria-label').split('。')[0]+'。マス目を一つずつ歩きます。W/Sで一マス前後、A/Dで横へ一マス、Q/Eまたは左右矢印で90度向きを変え、Xで振り返ります。画面下半分では、はじくと体ごと動き（上は前進、左右はカニ歩き、下は一歩後ろ）、少し押して音がしてから左右へ滑らせると見渡します。45度を越えるとその方向が正面になり、見渡しながら指を上へずらすとその方向へ歩きます。軽く触れると一マス進みます。');
- const notes=document.querySelector('.notes p');if(notes)notes.innerHTML='マス目をひとつずつ歩く。下半分ではじくと「体ごと動く」：上で前進、左右でカニ歩き、下で1歩後ろへ（押したままで続ける）。<br>少し押して「カチッ」としたら左右へ滑らせると「見渡す」：視線が指についてきて、45度を越えるとそちらが正面に。見渡しながら指を上へずらすとそのまま歩く。<br>軽く触れると一マス。PCは W A S D · Q E · ← → · X。';
+ canvas.setAttribute('aria-label',canvas.getAttribute('aria-label').split('。')[0]+'。マス目を一つずつ歩きます。W/Sで一マス前後、A/Dで横へ一マス、Q/Eまたは左右矢印で90度向きを変え、Xで振り返ります。画面下半分では、はじくと上で一歩前へ（押したままで一歩ずつ進み続ける）、下で一歩後ろへ、左右で90度向きを変えます。少し押して音がしてから左右へ滑らせると、向きは変えずに見渡せます。カニ歩きは画面下の左右の隅にある薄いボタンで。軽く触れると一マス進みます。');
+ const notes=document.querySelector('.notes p');if(notes)notes.innerHTML='マス目をひとつずつ歩く。下半分で<b>はじく</b>：上で一歩前へ（押したままで一歩ずつ進み続ける）、下で一歩後ろ、左右で向きを変える。<br><b>少し押して「カチッ」→ 左右へ滑らせる</b>と、向きは変えずに景色を見渡す。離すと正面へ。<br>カニ歩きは左右の隅の薄いボタン。軽く触れると一マス。PCは W A S D · Q E · ← → · X。';
  const book=document.querySelector('.book-controls');
- if(book)book.innerHTML='<h3>マス目を歩く</h3><p><b>はじく＝体ごと動く</b><br>上：前へ歩く／左右：カニ歩き／下：1歩後ろへ（上と左右は押したままで続く）<br><b>少し押して「カチッ」→ 左右へ滑らせる＝見渡す</b><br>視線が指についてきます。45度を越えると「カチッ」とそちらが正面になります。<br>見渡しながら指を上へずらすと、見ている方へそのまま歩きます。<br>離すと視線は正面に落ち着きます。軽く触れると一マス進みます。</p><p class="keyboard-notes">PC：W / S で前後 ／ A / D で横へ一マス ／ Q E ・ ← → で向き替え ／ X で振り返る<br>Shift で早足 ／ M で地図 ／ H でしおり ／ Esc で入力解除</p>';
+ if(book)book.innerHTML='<h3>マス目を歩く</h3><p><b>はじく＝一歩・向き替え</b><br>上：一歩前へ（押したままで一歩ずつ進み続ける）／下：一歩後ろへ／左右：90度向きを変える<br><b>少し押して「カチッ」→ 左右へ滑らせる＝見渡す</b><br>視線だけが指についてきます（左右120度まで）。向きは変わらず、離すと正面に戻ります。<br><b>カニ歩き</b>：画面下の左右の隅にある薄いボタン。押すたび一マス、押したままで続けて。<br>軽く触れると一マス進みます。</p><p class="keyboard-notes">PC：W / S で前後 ／ A / D で横へ一マス ／ Q E ・ ← → で向き替え ／ X で振り返る<br>Shift で早足 ／ M で地図 ／ H でしおり ／ Esc で入力解除</p>';
 }
+// Side-step buttons (D016): pressing one is a step sideways; holding it walks on, one eased cell at a time. A press too
+// quick to act before release is queued, so it is never lost. They never take focus, so the walk is not interrupted.
+const sideButtons=[...document.querySelectorAll('.side-step')];
+function releaseSide(e){
+ if(e&&e.pointerId!==sidePointer)return;
+ const command=sideHeld;if(command&&!sideActed&&started&&!paused&&pendingCommands.length<3)pendingCommands.push(command);
+ sideHeld=null;sidePointer=null;for(const b of sideButtons)b.classList.remove('pressed');
+}
+for(const button of sideButtons){
+ button.addEventListener('pointerdown',e=>{
+  e.preventDefault();if(!GRID_MODE||!started||paused||contextLost||sidePointer!==null||e.button>0)return;
+  sideHeld=button.dataset.command;sideActed=false;sidePointer=e.pointerId;button.classList.add('pressed');
+  try{button.setPointerCapture(e.pointerId);}catch{}resumeAudio();
+ });
+ button.addEventListener('pointerup',releaseSide);button.addEventListener('pointercancel',releaseSide);button.addEventListener('lostpointercapture',releaseSide);
+ button.addEventListener('contextmenu',e=>e.preventDefault());
+}
+addEventListener('pointerdown',e=>{if(e.pointerType==='touch')document.body.classList.add('touch');},true);
 function begin(){if(started||contextLost)return;started=true;notices.clear();document.body.classList.add('playing');canvas.focus();audio();}
 const beginButton=document.querySelector('#begin');beginButton.addEventListener('click',begin);beginButton.disabled=false;beginButton.removeAttribute('aria-busy');
 // A lost GPU context leaves a blank island: release input, stop footsteps, greetings and sound, and ask for a reload.
