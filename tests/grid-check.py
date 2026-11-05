@@ -10,7 +10,7 @@ atexit.register(server.terminate);time.sleep(.5)
 probe="""
 window._gridQA={
  canStep:(i,j,ni,nj)=>walker.canStep(i,j,ni,nj),
- go(i,j,h){walker.action=null;walker.i=i;walker.j=j;[walker.x,walker.z]=walker.center(i,j);walker.y=height(walker.x,walker.z)+1.65;if(h!==undefined){walker.heading=h;walker.yaw=-h*Math.PI/2;}},
+ go(i,j,h){walker.action=null;walker.i=i;walker.j=j;[walker.x,walker.z]=walker.center(i,j);walker.y=walker.eyeHeight(walker.x,walker.z);if(h!==undefined){walker.heading=h;walker.yaw=-h*Math.PI/2;}},
  corridor(n){
   const seen=new Set(['0,0']),queue=[[0,0]],dirs=[[0,-1],[1,0],[0,1],[-1,0]];
   while(queue.length){const [i,j]=queue.shift();
@@ -24,6 +24,7 @@ window._gridQA={
   while(queue.length){const [i,j]=queue.pop();for(const [dx,dz] of [[0,-1],[1,0],[0,1],[-1,0]]){const k=(i+dx)+','+(j+dz);if(!seen.has(k)&&walker.canStep(i,j,i+dx,j+dz)){seen.add(k);queue.push([i+dx,j+dz]);}}}
   const cells=[...seen].map(k=>k.split(',').map(Number)).map(([i,j])=>cellCentre(i,j)),near=(x,z,r)=>cells.some(([a,b])=>Math.hypot(a-x,b-z)<r);
   return {cells:cells.length,places:landmarks.filter(([,,x,z,r])=>!near(x,z,Math.max(r,CELL*.8))).map(l=>l[0]),islanders:npcs.filter(n=>!near(n.x,n.z,Math.max(4.8,CELL+.8))).map(n=>n.name),scenes:scenes.filter(s=>!near(s.x,s.z,s.radius)).map(s=>s.id),
+   clearance:Math.min(...[...seen].filter(k=>!roadCells.has(k)).map(k=>{const [i,j]=k.split(',').map(Number),[x,z]=cellCentre(i,j);return collisionWorld.clearance(x,z);})),
    islandersOnGrid:npcs.every(n=>{const [i,j]=cellIndex(n.x,n.z),[x,z]=cellCentre(i,j);return Math.abs(x-n.x)<1e-9&&Math.abs(z-n.z)<1e-9&&!roadCells.has(i+','+j);})};
  }
 };
@@ -72,9 +73,11 @@ with sync_playwright() as pw:
  assert page.evaluate('nagi.grid.cell')==7.5
  # Layout: every road cell can be walked both ways (no prop on a road), islanders sit on free cells,
  # and every place name, islander greeting and quiet scene can be reached from the landing.
- assert page.evaluate('_gridQA.roads()')==[]
+ bad_roads=page.evaluate('_gridQA.roads()');assert bad_roads==[],bad_roads
  reach=page.evaluate('_gridQA.reach()')
  assert reach['places']==[] and reach['islanders']==[] and reach['scenes']==[] and reach['islandersOnGrid'],reach
+ # No reachable cell off the roads stands with its nose against a rock or a wall (D018).
+ assert reach['clearance']>=1.2,reach['clearance']
  print('layout:',reach['cells'],'reachable cells; all roads open; all places, islanders and scenes reachable',flush=True)
  assert 'マス目' in page.locator('.notes p').inner_text()
  page.locator('#begin').click();page.wait_for_function("getComputedStyle(document.querySelector('#arrival')).visibility === 'hidden'",timeout=15000)
@@ -159,11 +162,14 @@ with sync_playwright() as pw:
  touch('touchStart',195,700);touch('touchMove',195,640);mobile.wait_for_function('nagi.grid.steps+nagi.grid.bumps>=2',timeout=15000);mobile.wait_for_timeout(800);touch('touchEnd');settle(mobile)
  done=actions();mobile.wait_for_timeout(600);assert actions()==done
  grid=lambda key:mobile.evaluate('nagi.grid.'+key)
- # D016: a quick sideways flick turns a quarter (once, however long the finger stays), with no step.
+ # D018: while the finger stays down, a sideways slide only glances; nothing turns until it lifts.
  heading,turns,before=grid('heading'),grid('turns'),actions()
- t=time.time();touch('touchStart',195,700,t);touch('touchMove',260,705,t+.08);mobile.wait_for_function(f'nagi.grid.turns>{turns}',timeout=15000)
- mobile.wait_for_timeout(1200);touch('touchEnd');settle(mobile)
- assert grid('heading')==(heading+1)%4 and grid('turns')==turns+1 and actions()==before,mobile.evaluate('nagi.grid')
+ t=time.time();touch('touchStart',195,700,t);touch('touchMove',260,705,t+.08)
+ mobile.wait_for_function('nagi.grid.look<-.2',timeout=15000);mobile.wait_for_timeout(600)
+ assert grid('turns')==turns and grid('heading')==heading,mobile.evaluate('nagi.grid')
+ # Lifting it quickly (the whole touch a flick) turns a quarter that way, once, with no step.
+ touch('touchEnd',at=t+.16);mobile.wait_for_function(f'nagi.grid.turns>{turns}',timeout=15000);settle(mobile)
+ assert grid('heading')==(heading+1)%4 and grid('turns')==turns+1 and actions()==before and abs(grid('look'))<.01,mobile.evaluate('nagi.grid')
  t=time.time();touch('touchStart',195,700,t);touch('touchMove',130,705,t+.08);touch('touchEnd',at=t+.12)
  mobile.wait_for_function(f'nagi.grid.turns>{turns+1}',timeout=15000);settle(mobile)
  assert grid('heading')==heading and actions()==before
