@@ -38,7 +38,7 @@ def settle(page):
   page.wait_for_timeout(250);now=page.evaluate('[nagi.grid.busy,nagi.position,nagi.grid.steps,nagi.grid.turns,nagi.grid.bumps]')
   if not now[0] and now==last:return
   last=now
- raise AssertionError('walker never settled')
+ raise AssertionError('walker never settled '+str(page.evaluate("[nagi.grid,document.querySelector('#side-left').className,document.querySelector('#side-right').className,document.body.className]")))
 def cell(page):
  p=page.evaluate('nagi.position');c=page.evaluate('nagi.grid.cell')
  i=(p['x']-8)/c;j=(p['z']-30)/c
@@ -138,7 +138,7 @@ with sync_playwright() as pw:
  assert page.evaluate('nagi.audioState')=='running'
  page.close()
 
- # Touch: upper half ignored; tap is one action; a held slide repeats; a flick turns; rest-then-slide crabs.
+ # Touch (D016): upper half ignored; tap is one action; a held flick up repeats; a sideways flick turns; a held slide looks; corner buttons crab.
  context=browser.new_context(viewport={'width':390,'height':844},is_mobile=True,has_touch=True)
  mobile=context.new_page();mobile.on('pageerror',lambda e:errors.append(str(e)));install(mobile)
  mobile.goto(base,wait_until='networkidle');mobile.wait_for_function('!!window.nagi && !!nagi.grid',timeout=30000)
@@ -159,25 +159,55 @@ with sync_playwright() as pw:
  touch('touchStart',195,700);touch('touchMove',195,640);mobile.wait_for_function('nagi.grid.steps+nagi.grid.bumps>=2',timeout=15000);mobile.wait_for_timeout(800);touch('touchEnd');settle(mobile)
  done=actions();mobile.wait_for_timeout(600);assert actions()==done
  grid=lambda key:mobile.evaluate('nagi.grid.'+key)
- # A quick sideways flick side-steps, facing unchanged (holding on would go on one cell at a time).
+ # D016: a quick sideways flick turns a quarter (once, however long the finger stays), with no step.
  heading,turns,before=grid('heading'),grid('turns'),actions()
- t=time.time();touch('touchStart',195,700,t);touch('touchMove',260,705,t+.08);mobile.wait_for_function(f'nagi.grid.steps+nagi.grid.bumps>{before}',timeout=15000);touch('touchEnd');settle(mobile)
- assert grid('heading')==heading and grid('turns')==turns
+ t=time.time();touch('touchStart',195,700,t);touch('touchMove',260,705,t+.08);mobile.wait_for_function(f'nagi.grid.turns>{turns}',timeout=15000)
+ mobile.wait_for_timeout(1200);touch('touchEnd');settle(mobile)
+ assert grid('heading')==(heading+1)%4 and grid('turns')==turns+1 and actions()==before,mobile.evaluate('nagi.grid')
+ t=time.time();touch('touchStart',195,700,t);touch('touchMove',130,705,t+.08);touch('touchEnd',at=t+.12)
+ mobile.wait_for_function(f'nagi.grid.turns>{turns+1}',timeout=15000);settle(mobile)
+ assert grid('heading')==heading and actions()==before
  # Held press (one click), then a short slide right: the view follows the finger, the heading stays; letting go settles.
  clicks=grid('holdClicks')
  t=time.time();touch('touchStart',150,700,t);mobile.wait_for_function(f'nagi.grid.holdClicks>{clicks}',timeout=15000)
  touch('touchMove',150+30,702,t+.3);touch('touchMove',150+90,702,t+.35)
  mobile.wait_for_function('nagi.grid.look<-.3',timeout=15000)
- assert grid('heading')==heading and grid('turns')==turns and grid('holdClicks')==clicks+1
+ assert grid('heading')==heading and grid('turns')==turns+2 and grid('holdClicks')==clicks+1
  touch('touchEnd');mobile.wait_for_function('Math.abs(nagi.grid.look)<.01',timeout=15000);assert grid('heading')==heading
- # Held press, then look further than 45 degrees: the heading follows the view (a second, soft tick), with no step.
- clicks,before=grid('holdClicks'),actions()
- t=time.time();touch('touchStart',120,700,t);mobile.wait_for_function(f'nagi.grid.holdClicks>{clicks}',timeout=15000)
- touch('touchMove',120+30,702,t+.3);touch('touchMove',120+30+130,702,t+.4)
- mobile.wait_for_function(f'nagi.grid.turns>{turns}',timeout=15000)
- # ...and sliding up as well walks the way the eyes now face.
- touch('touchMove',120+30+130,640,t+.6);mobile.wait_for_function(f'nagi.grid.steps+nagi.grid.bumps>{before}',timeout=15000);touch('touchEnd');settle(mobile)
- assert grid('heading')==(heading+1)%4 and grid('turns')==turns+1 and grid('holdClicks')>=clicks+2
+ # Held press, then a long look: it stops at 120 degrees and only the eyes move; sliding up as well does not walk.
+ turns,clicks,before=grid('turns'),grid('holdClicks'),actions()
+ t=time.time();touch('touchStart',100,700,t);mobile.wait_for_function(f'nagi.grid.holdClicks>{clicks}',timeout=15000)
+ touch('touchMove',100+30,702,t+.3);touch('touchMove',100+30+250,702,t+.4)
+ mobile.wait_for_function('nagi.grid.look<-1.9',timeout=15000);mobile.wait_for_timeout(300)
+ assert grid('look')>-2.1 and grid('heading')==heading and grid('turns')==turns and grid('holdClicks')==clicks+1
+ touch('touchMove',100+30+250,620,t+.6);mobile.wait_for_timeout(1200)
+ assert actions()==before and grid('heading')==heading
+ touch('touchEnd');mobile.wait_for_function('Math.abs(nagi.grid.look)<.01',timeout=15000);settle(mobile);assert actions()==before
+ # Two quick flicks up in a row: the second lands mid-step and is kept, so both step.
+ before=actions()
+ t=time.time();touch('touchStart',195,700,t);touch('touchMove',195,640,t+.04);touch('touchEnd',at=t+.08)
+ touch('touchStart',195,700,t+.15);touch('touchMove',195,640,t+.19);touch('touchEnd',at=t+.23)
+ mobile.wait_for_function(f'nagi.grid.steps+nagi.grid.bumps>={before+2}',timeout=15000);settle(mobile);assert actions()==before+2
+ # The faint corner buttons side-step: a tap is one cell, facing unchanged; holding walks on cell by cell.
+ for selector,inset in [('#side-left',0),('#side-right',1)]:
+  rect=mobile.locator(selector).bounding_box()
+  assert rect and rect['y']>844*.75 and 44<=rect['width']<=64 and 44<=rect['height']<=110,(selector,rect)
+  assert (rect['x']<80) if inset==0 else (rect['x']+rect['width']>390-80),(selector,rect)
+ assert mobile.evaluate("getComputedStyle(document.querySelector('#side-left')).opacity")<'0.6'
+ def press(selector,seconds):
+  rect=mobile.locator(selector).bounding_box();x,y=rect['x']+rect['width']/2,rect['y']+rect['height']/2
+  t=time.time();touch('touchStart',x,y,t)
+  if seconds:mobile.wait_for_timeout(int(seconds*1000))
+  touch('touchEnd',at=t+max(.06,seconds))
+ heading,turns,before=grid('heading'),grid('turns'),actions()
+ press('#side-right',0);mobile.wait_for_function(f'nagi.grid.steps+nagi.grid.bumps>{before}',timeout=15000);settle(mobile)
+ assert actions()==before+1 and grid('heading')==heading and grid('turns')==turns
+ before=actions();press('#side-left',0);mobile.wait_for_function(f'nagi.grid.steps+nagi.grid.bumps>{before}',timeout=15000);settle(mobile)
+ assert actions()==before+1 and grid('heading')==heading
+ before=actions()
+ rect=mobile.locator('#side-left').bounding_box();x,y=rect['x']+rect['width']/2,rect['y']+rect['height']/2
+ touch('touchStart',x,y);mobile.wait_for_function(f'nagi.grid.steps+nagi.grid.bumps>={before+2}',timeout=20000);touch('touchEnd');settle(mobile)
+ done=actions();mobile.wait_for_timeout(600);assert actions()==done and grid('heading')==heading and grid('turns')==turns
  # A quick downward flick steps back once, facing unchanged; holding on does not repeat it.
  heading,before=grid('heading'),actions()
  t=time.time();touch('touchStart',195,640,t);touch('touchMove',195,700,t+.08);mobile.wait_for_function(f'nagi.grid.steps+nagi.grid.bumps>{before}',timeout=15000)
@@ -207,4 +237,4 @@ with sync_playwright() as pw:
  mobile.screenshot(path=str(root/'grid-mobile.png'))
  assert not errors,errors
  browser.close()
-print('default grid mode: regional music and sky, grid layout, single and gliding steps, quarter turns, side-step flicks, hold click, continuous look that re-aims the heading, look-and-walk, stroll, shore bumps, automap and touch passed')
+print('default grid mode: regional music and sky, grid layout, single and gliding steps, quarter turns, turn flicks, hold click, view-only look with its limit, queued quick flicks, corner side-step buttons, stroll, shore bumps, automap and touch passed')

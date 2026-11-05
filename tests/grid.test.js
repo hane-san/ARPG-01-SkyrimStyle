@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {height,walkable,landmarks} from '../dist/terrain.js';
 import {CollisionWorld,circleCollider} from '../dist/movement.js';
 import {routes} from '../dist/terrain.js';
-import {LOOK_PIXELS_PER_QUARTER,SIDE_STEP_SECONDS,STROLL_STEP_SECONDS,ONE_SHOT,TURN_AROUND_SECONDS,CELL,GRID_ORIGIN,STEP_SECONDS,TURN_SECONDS,HOLD_SECONDS,HEADINGS,headingYaw,nearestHeading,hermite,GridWalker,GridGesture,keyCommand,swipeCommand,automapCells,gridCells,gridRoute} from '../dist/grid.js';
+import {LOOK_LIMIT_QUARTERS,LOOK_PIXELS_PER_QUARTER,SIDE_STEP_SECONDS,STROLL_STEP_SECONDS,ONE_SHOT,TURN_AROUND_SECONDS,CELL,GRID_ORIGIN,STEP_SECONDS,TURN_SECONDS,HOLD_SECONDS,HEADINGS,headingYaw,nearestHeading,hermite,GridWalker,GridGesture,keyCommand,swipeCommand,automapCells,gridCells,gridRoute} from '../dist/grid.js';
 
 const flat=(obstacles=[],dry=()=>true)=>new CollisionWorld(obstacles,{height:()=>1,walkable:dry});
 const run=(w,seconds)=>{for(let t=0;t<seconds;t+=1/60)w.update(1/60);};
@@ -60,7 +60,8 @@ test('keys and slides map to the same six commands',()=>{
  assert.equal(keyCommand('KeyW'),'forward');assert.equal(keyCommand('ArrowDown'),'back');assert.equal(keyCommand('KeyA'),'strafeLeft');
  assert.equal(keyCommand('KeyE'),'turnRight');assert.equal(keyCommand('ArrowLeft'),'turnLeft');assert.equal(keyCommand('ShiftLeft'),null);
  assert.equal(swipeCommand(0,-10),null);assert.equal(swipeCommand(4,-40),'forward');assert.equal(swipeCommand(-3,40),'back');assert.equal(swipeCommand(-3,40,true),'back');assert.equal(swipeCommand(-40,10,true),'look');assert.equal(swipeCommand(4,-40,true),'forward');
- assert.equal(swipeCommand(-40,10),'strafeLeft');assert.equal(swipeCommand(40,-10),'strafeRight');
+ // D016: a sideways flick turns; side-steps are the corner buttons, not a gesture.
+ assert.equal(swipeCommand(-40,10),'turnLeft');assert.equal(swipeCommand(40,-10),'turnRight');
 });
 
 test('gesture: lower half only, tap is one step, multitouch and release clear input',()=>{
@@ -68,8 +69,10 @@ test('gesture: lower half only, tap is one step, multitouch and release clear in
  assert.equal(g.begin(touch(1,100,200),b,0),false);g.end(touch(1,100,200),0);
  assert.equal(g.begin(touch(2,100,600),b,0),true);assert.equal(g.end(touch(2,101,601),.1),'tap');
  assert.equal(g.begin(touch(3,100,600),b,0),true);g.move(touch(3,100,560),.05);assert.equal(g.command,'forward');
- g.move(touch(3,160,565),.1);assert.equal(g.command,'strafeRight');
- assert.equal(g.end(touch(3,140,560),1),true);assert.equal(g.held,false);assert.equal(g.command,null);
+ g.move(touch(3,160,565),.1);assert.equal(g.command,'turnRight');
+ // A flick that ends before it could act is handed back, so the page queues it rather than losing it.
+ assert.equal(g.end(touch(3,140,560),1),'turnRight');assert.equal(g.held,false);assert.equal(g.command,null);
+ g.begin(touch(31,100,600),b,0);g.move(touch(31,100,540),.05);g.take('forward');assert.equal(g.end(touch(31,100,540),.3),true);
  assert.equal(g.begin(touch(4,100,600),b,0),true);g.move(touch(4,100,550),.05);
  assert.equal(g.begin(touch(5,200,600,{isPrimary:false}),b,0),false);assert.equal(g.held,false);assert.equal(g.command,null);
  g.end(touch(4,100,550),.1);g.end(touch(5,200,600),.1);assert.equal(g.begin(touch(6,100,600),b,0),true);
@@ -104,25 +107,30 @@ test('a held walk glides between cells at constant speed and eases out on releas
  assert.equal(back,false);assert.equal(r.z,-CELL);
 });
 
-test('a flick moves you, a held sideways slide looks around continuously and can walk where it looks',()=>{
+test('a flick turns or steps once; a held sideways slide only looks, within a limit, and never turns',()=>{
  const g=new GridGesture(),b={top:0,height:800},touch=(id,x,y)=>({pointerId:id,pointerType:'touch',clientX:x,clientY:y,button:0,buttons:1,isPrimary:true});
- // Flicks: sideways side-steps (gliding on while held), down steps back (offered once per slide), up walks.
- g.begin(touch(1,200,600),b,0);g.move(touch(1,250,600),.08);assert.equal(g.available(),'strafeRight');assert.equal(g.careful,false);g.end(touch(1,250,600),.2);
+ assert.ok(ONE_SHOT.has('turnLeft')&&ONE_SHOT.has('turnRight')&&ONE_SHOT.has('back')&&!ONE_SHOT.has('forward'));
+ // Flicks: sideways turns a quarter, once per slide however long the finger stays down.
+ g.begin(touch(1,200,600),b,0);g.move(touch(1,250,600),.08);assert.equal(g.available(),'turnRight');assert.equal(g.careful,false);
+ g.take('turnRight');assert.equal(g.available(),null);g.move(touch(1,300,600),.5);assert.equal(g.available(),null);g.end(touch(1,300,600),.6);
+ g.begin(touch(11,200,600),b,0);g.move(touch(11,150,600),.08);assert.equal(g.available(),'turnLeft');g.end(touch(11,150,600),.1);
+ // Down steps back once per slide; up walks forward and keeps offering a step while held (one eased cell at a time).
  g.begin(touch(2,200,600),b,0);g.move(touch(2,200,660),.08);assert.equal(g.available(),'back');g.take('back');assert.equal(g.available(),null);g.end(touch(2,200,690),1.1);
+ g.begin(touch(21,200,600),b,0);g.move(touch(21,200,540),.06);assert.equal(g.available(),'forward');g.take('forward');assert.equal(g.available(),'forward');g.end(touch(21,200,540),1);
  // Held then down is a step back too: nothing spins you round by accident.
  g.begin(touch(3,200,600),b,0);g.move(touch(3,200,660),.5);assert.equal(g.available(),'back');g.end(touch(3,200,660),.6);
- // Held press arms once; a sideways slide then looks, continuously and without a limit, from where the look began.
+ // Held press arms once; a sideways slide then only looks, from where the look began, up to the limit either way.
  g.begin(touch(4,200,600),b,0);assert.equal(g.arm(HOLD_SECONDS-.01),false);assert.equal(g.arm(HOLD_SECONDS+.01),true);
  g.move(touch(4,230,602),HOLD_SECONDS+.1);assert.equal(g.command,'look');assert.equal(g.available(),null);assert.equal(g.look,0);
  g.move(touch(4,230+LOOK_PIXELS_PER_QUARTER/2,602),.4);assert.ok(Math.abs(g.look-.5)<1e-9);
- g.move(touch(4,230+LOOK_PIXELS_PER_QUARTER*2,602),.5);assert.ok(Math.abs(g.look-2)<1e-9,'no limit: two quarters of look');
- // The heading taking a quarter shifts the reference, so the look (and the view) do not jump.
- g.shiftLook(1);assert.ok(Math.abs(g.look-1)<1e-9);
- // Swinging back through the origin keeps looking (now to the left).
+ g.move(touch(4,230+LOOK_PIXELS_PER_QUARTER*3,602),.5);assert.equal(g.look,LOOK_LIMIT_QUARTERS);assert.equal(g.available(),null,'looking never turns');
+ // Swinging back through the origin keeps looking (now to the left); sliding up while looking does not walk.
  g.move(touch(4,150,602),.6);assert.equal(g.command,'look');assert.ok(g.look<0);
- // Sliding the finger up while looking walks forward, and the look goes on.
- g.move(touch(4,150,560),.7);assert.equal(g.available(),'forward');assert.equal(g.command,'look');assert.equal(g.careful,true);g.end(touch(4,150,560),.8);
- // Walking forward and then sliding sideways looks: steering by eye.
+ g.move(touch(4,150,540),.7);assert.equal(g.command,'look');assert.equal(g.available(),null);
+ g.move(touch(4,-900,540),.75);assert.equal(g.look,-LOOK_LIMIT_QUARTERS);
+ // A look is not a lost command on release.
+ assert.equal(g.end(touch(4,-900,540),.8),true);assert.equal(g.look,0);
+ // Walking forward and then sliding sideways looks: a glance aside while walking on.
  g.begin(touch(5,200,600),b,0);g.move(touch(5,200,540),.05);assert.equal(g.available(),'forward');assert.equal(g.careful,false);
  g.move(touch(5,290,560),.8);assert.equal(g.command,'look');g.end(touch(5,290,560),.9);
  // A tap is a quick still press; a press that moves first never clicks.

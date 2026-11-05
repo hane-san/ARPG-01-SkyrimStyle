@@ -104,6 +104,15 @@ button:focus-visible{outline:2px solid #385e4b;outline-offset:4px}
 #automap[hidden],body:not(.playing) #automap{display:none}
 .reading #automap{opacity:0}
 
+/* Grid mode (D016): two faint side-step buttons in the bottom corners, for touch. A press is one cell sideways and
+   holding walks on cell by cell. They stay faint so the scene below remains the view, and never take focus. */
+.side-step{display:none;position:fixed;bottom:calc(var(--safe-bottom) + 14px);z-index:2;width:52px;height:96px;min-width:0;min-height:0;padding:0;border:1px solid #f3f0e230;border-radius:26px;background:#f3f0e214;color:#f3f0e2;opacity:.42;touch-action:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent;cursor:pointer;transition:opacity .25s,background .25s}
+#side-left{left:max(3vw,var(--safe-left))}#side-right{right:max(3vw,var(--safe-right))}
+.side-step svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.side-step.pressed{opacity:.8;background:#f3f0e238}
+@media(pointer:coarse),(hover:none){.grid-mode.playing .side-step{display:block}}
+.grid-mode.playing.touch .side-step{display:block}
+.reading .side-step{display:none!important}
 @media(max-width:700px),(pointer:coarse){.grid-mode #greeting{top:calc(var(--safe-top) + 230px)}}
 @media(max-height:600px) and (orientation:landscape){
  #automap{top:calc(var(--safe-top) + 12px);right:calc(max(4vw,var(--safe-right)) + 56px);width:112px;height:112px}
