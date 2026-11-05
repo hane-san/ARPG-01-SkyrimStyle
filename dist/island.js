@@ -3,7 +3,7 @@ const {CRUISE_SPEED,footStride,nearPlaneMargin,CollisionWorld,circleCollider,box
 const {journeyScenes,landscapeColor,readingSeconds,JourneyNotices}=await import('./journey.js'+new URL(import.meta.url).search);
 const {REGIONS,SHORE_REGION,RegionTracker}=await import('./regions.js'+new URL(import.meta.url).search);
 const {RegionMusic}=await import('./music.js'+new URL(import.meta.url).search);
-const {ONE_SHOT,TURN_COMMANDS,CELL,GRID_ORIGIN,STEP_SECONDS,QUICK_STEP_SECONDS,HEADING_NAMES,GridWalker,GridGesture,keyCommand,automapCells,gridRoute,gridCells}=await import('./grid.js'+new URL(import.meta.url).search);
+const {LOOK_DEGREES,LOOK_TURN,ONE_SHOT,TURN_COMMANDS,CELL,GRID_ORIGIN,STEP_SECONDS,QUICK_STEP_SECONDS,HEADING_NAMES,GridWalker,GridGesture,keyCommand,automapCells,gridRoute,gridCells}=await import('./grid.js'+new URL(import.meta.url).search);
 // Dungeon-crawler travel is the default (producer decision 2026-11-04): the same island, one grid cell at a time.
 // ?grid=0 keeps the earlier free walking for comparison and its regression checks.
 const GRID_MODE=new URLSearchParams(location.search).get('grid')!=='0';
@@ -756,10 +756,15 @@ function heldCommand(){
  for(let i=keyOrder.length-1;i>=0;i--){const c=keyCommand(keyOrder[i]);if(c)return c;}
  return null;
 }
-let activeCommand=null,bumpedCommand=null,bumpedAt=null;
+let lookYaw=0,activeCommand=null,bumpedCommand=null,bumpedAt=null;
 function gridUpdate(dt){
- // A still press arms careful walking: a soft click (and a tap of vibration where supported) says so.
+ // A still press arms the held mode: a soft click (and a tap of vibration where supported) says so.
  if(gridGesture.arm(performance.now()/1000))holdClick();
+ // Looking around: the view follows the finger up to LOOK_DEGREES; pulling further clicks and turns a quarter,
+ // starting from where the view already is. Letting go (or leaving the look) eases the view back to the heading.
+ const look=gridGesture.look,lookLimit=LOOK_DEGREES*Math.PI/180;
+ if(Math.abs(look)>=LOOK_TURN&&!walker.action&&walker.cooldown<=0&&walker.command(look>0?'turnRight':'turnLeft',{look:lookYaw})==='turn'){lookYaw=0;gridGesture.rebaseLook();holdClick();}
+ else lookYaw+=(-Math.max(-1,Math.min(1,look))*lookLimit-lookYaw)*(1-Math.exp(-dt*12));
  const held=heldCommand();
  // Letting go (or changing direction) mid-step slows to a stop on the cell being entered.
  if(held!==activeCommand)walker.easeOut();
@@ -774,15 +779,17 @@ function gridUpdate(dt){
   if(command&&!(TURN_COMMANDS.has(command)&&walker.cooldown>0)&&!(command===bumpedCommand&&where===bumpedAt&&!fresh)){
    // One-shot touch commands (a step back, an about-face) act once per slide and always ease to a stop.
    // A held press then slide walks carefully: one eased cell at a time with a short rest, never a glide.
-   const fromGesture=!fresh&&gridGesture.held&&command===gridGesture.command,slow=fromGesture&&gridGesture.careful;
-   const result=walker.command(command,{quick:keys.has('ShiftLeft')||keys.has('ShiftRight'),slow,hold:command===held&&!slow&&!(fromGesture&&ONE_SHOT.has(command))});
+   // Flicked side-steps and steps back are single eased cells; the held-press walk forward strolls without stopping.
+   const fromGesture=!fresh&&gridGesture.held&&command===gridGesture.command;
+   const slow=fromGesture&&(command==='strafeLeft'||command==='strafeRight'||command==='back'),stroll=fromGesture&&gridGesture.careful&&command==='forward';
+   const result=walker.command(command,{quick:keys.has('ShiftLeft')||keys.has('ShiftRight'),slow,stroll,hold:command===held&&!slow&&!(fromGesture&&ONE_SHOT.has(command))});
    if(result&&!fresh&&gridGesture.held)gridGesture.take(command);
    if(result==='step'){const [x,z]=walker.center(walker.i,walker.j);footstep(surfaceAt(x,z),CELL/STEP_SECONDS);}
    if(result==='blocked'){bumpedCommand=command;bumpedAt=where;}else if(result){bumpedCommand=null;}
   }
   if(!held&&!fresh)bumpedCommand=null;
  }
- player.x=walker.x;player.z=walker.z;player.y=walker.y;player.yaw=walker.yaw;player.travelled=walker.travelled;player.actualSpeed=walker.speed;
+ player.x=walker.x;player.z=walker.z;player.y=walker.y;player.yaw=walker.yaw+lookYaw;player.travelled=walker.travelled;player.actualSpeed=walker.speed;
  drawAutomap();
 }
 function update(dt){
@@ -993,7 +1000,7 @@ const automap=document.querySelector('#automap'),automapCtx=automap?.getContext(
 const npcCells=npcs.map(n=>cellIndex(n.x,n.z));
 function drawAutomap(){
  if(!walker||!automapCtx)return;
- const key=walker.i+','+walker.j+','+walker.heading+','+Math.round(walker.yaw*40)+','+walker.visited.size+','+automapShown+','+innerWidth+'x'+innerHeight;
+ const key=walker.i+','+walker.j+','+walker.heading+','+Math.round(player.yaw*40)+','+walker.visited.size+','+automapShown+','+innerWidth+'x'+innerHeight;
  if(key===automapKey)return;automapKey=key;
  automap.hidden=!automapShown;if(!automapShown)return;
  const size=automap.clientWidth||148,ratio=Math.min(devicePixelRatio||1,2),radius=6,unit=size/(radius*2+1);
@@ -1023,7 +1030,7 @@ function drawAutomap(){
   if(seen){c.beginPath();c.arc((i-walker.i+radius+.5)*unit,(j-walker.j+radius+.5)*unit,unit*.3,0,Math.PI*2);c.fill();}
  }
  const cx=(radius+.5)*unit,cy=(radius+.5)*unit;
- c.save();c.translate(cx,cy);c.rotate(-walker.yaw);c.beginPath();c.moveTo(0,-unit*.78);c.lineTo(unit*.58,unit*.52);c.lineTo(0,unit*.22);c.lineTo(-unit*.58,unit*.52);c.closePath();
+ c.save();c.translate(cx,cy);c.rotate(-player.yaw);c.beginPath();c.moveTo(0,-unit*.78);c.lineTo(unit*.58,unit*.52);c.lineTo(0,unit*.22);c.lineTo(-unit*.58,unit*.52);c.closePath();
  c.fillStyle='#f6b26b';c.fill();c.lineWidth=1.5;c.strokeStyle='#263a34';c.stroke();c.restore();
  c.font='bold 11px sans-serif';c.textAlign='center';c.textBaseline='top';c.fillStyle='#f3f0e2';c.fillText('N',size/2,3);
  c.textAlign='left';c.fillText(HEADING_NAMES[walker.heading],5,3);
@@ -1031,10 +1038,10 @@ function drawAutomap(){
 }
 if(GRID_MODE){
  document.body.classList.add('grid-mode');
- canvas.setAttribute('aria-label',canvas.getAttribute('aria-label').split('。')[0]+'。マス目を一つずつ歩きます。W/Sで一マス前後、A/Dで横へ一マス、Q/Eまたは左右矢印で90度向きを変え、Xで振り返ります。画面下半分では、はじくとその向きを見て（上は前進、左右は向き替え、下は振り返り）、少し押して音がしてから滑らせると、その方向へ一マスずつ歩きます。軽く触れると一マス進みます。');
- const notes=document.querySelector('.notes p');if(notes)notes.innerHTML='マス目をひとつずつ歩く。下半分ではじくと「その向きを見る」：上で前進、左右で向き替え、下で振り返る。<br>少し押して「カチッ」としたら滑らせると「その方向へ1マスずつ歩く」：上で前、左右でカニ歩き、下で後ろへ。<br>軽く触れると一マス。PCは W A S D · Q E · ← → · X。';
+ canvas.setAttribute('aria-label',canvas.getAttribute('aria-label').split('。')[0]+'。マス目を一つずつ歩きます。W/Sで一マス前後、A/Dで横へ一マス、Q/Eまたは左右矢印で90度向きを変え、Xで振り返ります。画面下半分では、はじくと体ごと動き（上は前進、左右はカニ歩き、下は一歩後ろ）、少し押して音がしてから滑らせると顔を向けます（左右で見渡し、さらに引くと旋回、下で振り返り、上でゆったり前進）。軽く触れると一マス進みます。');
+ const notes=document.querySelector('.notes p');if(notes)notes.innerHTML='マス目をひとつずつ歩く。下半分ではじくと「体ごと動く」：上で前進、左右でカニ歩き、下で1歩後ろへ。<br>少し押して「カチッ」としたら滑らせると「顔を向ける」：左右で見渡し、さらに引くと90度旋回。下で振り返り、上でゆったり歩く。<br>軽く触れると一マス。PCは W A S D · Q E · ← → · X。';
  const book=document.querySelector('.book-controls');
- if(book)book.innerHTML='<h3>マス目を歩く</h3><p><b>はじく＝その向きを見る</b><br>上：前へ歩く（保持で歩き続ける）／左右：90度の向き替え／下：振り返る<br><b>少し押して「カチッ」→ 滑らせる＝その方向へ歩く</b><br>上：前へ／左右：カニ歩き／下：前を向いたまま後ろへ（どれも1マスずつ、ゆっくり）<br>前へ歩きながら横や下へ滑らせても、1マスずつ歩きます。<br>軽く触れると一マス進みます。</p><p class="keyboard-notes">PC：W / S で前後 ／ A / D で横へ一マス ／ Q E ・ ← → で向き替え ／ X で振り返る<br>Shift で早足 ／ M で地図 ／ H でしおり ／ Esc で入力解除</p>';
+ if(book)book.innerHTML='<h3>マス目を歩く</h3><p><b>はじく＝体ごと動く</b><br>上：前へ歩く（保持で歩き続ける）／左右：カニ歩き（保持で1マスずつ）／下：1歩後ろへ<br><b>少し押して「カチッ」→ 滑らせる＝顔を向ける</b><br>左右：指に合わせて景色を見渡す（45度まで）。さらに引くと「カチッ」と90度旋回<br>下：振り返る／上：止まらずゆったり前へ歩く<br>離すと視線は正面に戻ります。軽く触れると一マス進みます。</p><p class="keyboard-notes">PC：W / S で前後 ／ A / D で横へ一マス ／ Q E ・ ← → で向き替え ／ X で振り返る<br>Shift で早足 ／ M で地図 ／ H でしおり ／ Esc で入力解除</p>';
 }
 function begin(){if(started||contextLost)return;started=true;notices.clear();document.body.classList.add('playing');canvas.focus();audio();}
 const beginButton=document.querySelector('#begin');beginButton.addEventListener('click',begin);beginButton.disabled=false;beginButton.removeAttribute('aria-busy');
@@ -1044,4 +1051,4 @@ canvas.addEventListener('webglcontextlost',()=>{
  const error=document.querySelector('#error');error.textContent='島を読み込めませんでした。ページを開き直してください。';error.hidden=false;
 });
 // Minimal diagnostic state for development; no interface is added during play.
-window.nagi={get release(){return document.querySelector('meta[name="nagi-release"]')?.content||'local'},get position(){return{x:player.x,z:player.z,yaw:player.yaw}},get camera(){return{...camera}},get turningRate(){return player.yawRate},get continuousRun(){return player.runSeconds},get surge(){return player.surge},get collisionChecks(){return collisionWorld.checks},get actualSpeed(){return player.actualSpeed},get blockedFor(){return player.blockedFor},get monuments(){return monuments.length},get renderedVertices(){return drawnVertices},get drawCalls(){return drawCalls},get started(){return started},get speed(){return Math.hypot(player.vx,player.vz)},get dragging(){return gestures.held},get fov(){return CAMERA_FOV},get greetingDistance(){return lastGreetingDistance},get footsteps(){return footstepCount},get audioState(){return audioCtx?.state||'unavailable'},get footSurface(){return lastFootSurface},get worldVertices(){return terrain.count+roadChunks.reduce((n,b)=>n+b.count,0)+world.count+sea.count+scenery.reduce((n,b)=>n+b.count,0)+movingSails.reduce((n,b)=>n+b.count,0)+birdMesh.count},get places(){return [...shownPlaces]},get islanders(){return npcs.length},get greeted(){return npcs.reduce((a,n)=>a+n.index,0)},get region(){return regionTracker.current.id},get musicTrack(){return music?.trackId||null},get skyHorizon(){return [...skyMood.low]},get grid(){return walker?{holdClicks,cell:CELL,road:roadCells.has(walker.i+','+walker.j),i:walker.i,j:walker.j,heading:walker.heading,steps:walker.steps,turns:walker.turns,bumps:walker.bumps,visited:walker.visited.size,busy:walker.busy,automap:!automap.hidden}:null}};
+window.nagi={get release(){return document.querySelector('meta[name="nagi-release"]')?.content||'local'},get position(){return{x:player.x,z:player.z,yaw:player.yaw}},get camera(){return{...camera}},get turningRate(){return player.yawRate},get continuousRun(){return player.runSeconds},get surge(){return player.surge},get collisionChecks(){return collisionWorld.checks},get actualSpeed(){return player.actualSpeed},get blockedFor(){return player.blockedFor},get monuments(){return monuments.length},get renderedVertices(){return drawnVertices},get drawCalls(){return drawCalls},get started(){return started},get speed(){return Math.hypot(player.vx,player.vz)},get dragging(){return gestures.held},get fov(){return CAMERA_FOV},get greetingDistance(){return lastGreetingDistance},get footsteps(){return footstepCount},get audioState(){return audioCtx?.state||'unavailable'},get footSurface(){return lastFootSurface},get worldVertices(){return terrain.count+roadChunks.reduce((n,b)=>n+b.count,0)+world.count+sea.count+scenery.reduce((n,b)=>n+b.count,0)+movingSails.reduce((n,b)=>n+b.count,0)+birdMesh.count},get places(){return [...shownPlaces]},get islanders(){return npcs.length},get greeted(){return npcs.reduce((a,n)=>a+n.index,0)},get region(){return regionTracker.current.id},get musicTrack(){return music?.trackId||null},get skyHorizon(){return [...skyMood.low]},get grid(){return walker?{look:lookYaw,holdClicks,cell:CELL,road:roadCells.has(walker.i+','+walker.j),i:walker.i,j:walker.j,heading:walker.heading,steps:walker.steps,turns:walker.turns,bumps:walker.bumps,visited:walker.visited.size,busy:walker.busy,automap:!automap.hidden}:null}};

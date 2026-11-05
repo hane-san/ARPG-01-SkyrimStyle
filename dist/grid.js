@@ -2,7 +2,7 @@
 // No DOM, WebGL or audio. The world supplies walkable(), height() and the swept move() of CollisionWorld.
 // 4.5 m cells. A held walk glides through cells at a constant 18.75 m/s (Shift: about 26 m/s);
 // it eases in from rest and eases out when the finger or key lets go, instead of pausing at every cell.
-export const CELL=6,GRID_ORIGIN=Object.freeze([8,30]),STEP_SECONDS=.32,QUICK_STEP_SECONDS=.23,TURN_SECONDS=.55,TURN_AROUND_SECONDS=.95,TURN_REPEAT_PAUSE=.2,SLOW_STEP_SECONDS=.5,SLOW_REST_SECONDS=.12,BUMP_SECONDS=.26,EYE_HEIGHT=1.65,EYE_SETTLE_SECONDS=.1,EYE_FLOOR=1.4,EYE_SPREAD=2.6;
+export const CELL=6,GRID_ORIGIN=Object.freeze([8,30]),STEP_SECONDS=.32,QUICK_STEP_SECONDS=.23,TURN_SECONDS=.55,TURN_AROUND_SECONDS=.95,TURN_REPEAT_PAUSE=.2,SLOW_STEP_SECONDS=.4,SLOW_REST_SECONDS=.1,STROLL_STEP_SECONDS=.42,LOOK_DEGREES=45,BUMP_SECONDS=.26,EYE_HEIGHT=1.65,EYE_SETTLE_SECONDS=.1,EYE_FLOOR=1.4,EYE_SPREAD=2.6;
 // Headings are compass quarters: 0 north (-z), 1 east (+x), 2 south (+z), 3 west (-x).
 export const HEADINGS=Object.freeze([[0,-1],[1,0],[0,1],[-1,0]]);
 export const HEADING_NAMES=Object.freeze(['北','東','南','西']);
@@ -16,7 +16,7 @@ export function hermiteSlope(w,m0,m1){return (3*w*w-4*w+1)*m0+(6*w-6*w*w)+(3*w*w
 export const COMMANDS=Object.freeze(['forward','back','strafeLeft','strafeRight','turnLeft','turnRight','turnAround']);
 // Touch commands that act once per slide rather than repeating while the finger is held.
 export const TURN_COMMANDS=Object.freeze(new Set(['turnLeft','turnRight','turnAround']));
-export const ONE_SHOT=Object.freeze(new Set(['turnAround']));
+export const ONE_SHOT=Object.freeze(new Set(['back','turnAround']));
 // Movement direction relative to the current heading, in quarter turns.
 const MOVE_OFFSET={forward:0,strafeRight:1,back:2,strafeLeft:3};
 
@@ -50,19 +50,21 @@ export class GridWalker {
  }
  // Starts a command. Returns 'step', 'turn', 'blocked', or null while a previous action is still playing.
  // hold: the input is still held, so the step leaves its cell at full speed instead of slowing to a stop.
- // slow: a careful cell-by-cell step (held press then slide), easing in and out, with a short rest before the next one.
- command(name,{quick=false,hold=false,slow=false}={}){
+ // slow: one eased cell (a flicked side-step or step back), with a short rest before the next one.
+ // stroll: the held-press walk forward, gliding without stops at a gentler pace.
+ // look: the current look-around offset (radians); a turn starts from where the view already is and lands on the heading.
+ command(name,{quick=false,hold=false,slow=false,stroll=false,look=0}={}){
   // The pause after a turn only spaces out repeated turns: a step may start straight away.
   if(this.action!==null||!COMMANDS.includes(name)||(this.cooldown>0&&TURN_COMMANDS.has(name))||(slow&&this.rest>0))return null;
   const carry=this.carry;this.carry=null;
   if(name==='turnLeft'||name==='turnRight'||name==='turnAround'){
-   const quarters=name==='turnRight'?1:name==='turnLeft'?-1:2,from=this.yaw;
+   const quarters=name==='turnRight'?1:name==='turnLeft'?-1:2,from=this.yaw+look;
    // An about-face always turns to the right, through a full half turn.
    // The yaw stays continuous (it may pass beyond ±2π): snapping it back to headingYaw() at the end of a turn
    // jumped a full circle, and the camera, interpolating between frames, drew one frame facing elsewhere.
-   const delta=-quarters*Math.PI/2;
+   const delta=this.yaw-quarters*Math.PI/2-from,base=quarters===2?TURN_AROUND_SECONDS:TURN_SECONDS;
    this.heading=(this.heading+quarters+4)%4;this.turns++;
-   this.action={kind:'turn',t:0,duration:quarters===2?TURN_AROUND_SECONDS:TURN_SECONDS,fromYaw:from,deltaYaw:delta};return 'turn';
+   this.action={kind:'turn',t:0,duration:Math.max(.22,base*Math.abs(delta)/(Math.abs(quarters)*Math.PI/2)),fromYaw:from,deltaYaw:delta};return 'turn';
   }
   const [dx,dz]=HEADINGS[(this.heading+MOVE_OFFSET[name])%4],ni=this.i+dx,nj=this.j+dz;
   const [ax,az]=this.center(this.i,this.j),[bx,bz]=this.center(ni,nj);
@@ -70,7 +72,7 @@ export class GridWalker {
    this.bumps++;this.action={kind:'bump',t:0,duration:BUMP_SECONDS,ax,az,dx,dz};return 'blocked';
   }
   this.i=ni;this.j=nj;this.visited.add(this.key(ni,nj));this.steps++;
-  const duration=slow?SLOW_STEP_SECONDS:quick?QUICK_STEP_SECONDS:STEP_SECONDS;
+  const duration=slow?SLOW_STEP_SECONDS:stroll?STROLL_STEP_SECONDS:quick?QUICK_STEP_SECONDS:STEP_SECONDS;
   // Arriving speed carries into a step in the same direction, so a held walk never pauses between cells.
   const m0=!slow&&carry&&carry.dx===dx&&carry.dz===dz?Math.min(1.6,carry.speed*duration/this.cell):0;
   this.action={kind:'step',t:0,duration,ax,az,bx,bz,dx,dz,s0:0,m0,m1:hold&&!slow?1:0,slow};
@@ -157,27 +159,32 @@ export function gridRoute(points,origin=GRID_ORIGIN,cell=CELL,walkable=null){
 const KEY_COMMANDS={KeyX:'turnAround',KeyW:'forward',ArrowUp:'forward',KeyS:'back',ArrowDown:'back',KeyA:'strafeLeft',KeyD:'strafeRight',KeyQ:'turnLeft',ArrowLeft:'turnLeft',KeyE:'turnRight',ArrowRight:'turnRight'};
 export function keyCommand(code){return KEY_COMMANDS[code]||null;}
 
-// Touch: one finger in the lower half. The rule fits in one sentence: a flick looks, a held slide walks.
-// - A quick flick (a slide that starts within HOLD_SECONDS): up walks forward (gliding while held), left/right turn a
-//   quarter (repeating while held), down turns right round (once per slide).
-// - A held press (the game clicks when it arms) and then a slide walks carefully, one cell at a time with a short
-//   rest between cells: up forward, down back, left/right side-steps. Facing never changes.
-// - Walking forward and then sliding sideways or back also walks carefully, so a drifting finger never spins the view.
+// Touch: one finger in the lower half. The rule fits in one sentence: a flick moves you, a held slide turns your head.
+// - A quick flick (a slide that starts within HOLD_SECONDS): up walks forward (gliding while held), left/right
+//   side-step one cell (repeating one cell at a time while held), down steps back one cell (once per slide).
+// - A held press (the game clicks when it arms) and then a slide: left/right look around, the view following the finger
+//   up to LOOK_DEGREES; pulling further clicks again and turns a quarter (the look continues from the new heading).
+//   Down turns right round (once). Up strolls forward without stopping, at a gentler pace.
+// - Walking forward and then sliding sideways looks around too: a drifting finger only glances, it never side-steps.
 // A short still tap is one step forward.
-export const SWIPE_DISTANCE=22,TAP_DISTANCE=10,HOLD_SECONDS=.16,TAP_SECONDS=HOLD_SECONDS;
-const FLICK={up:'forward',down:'turnAround',left:'turnLeft',right:'turnRight'},CAREFUL={up:'forward',down:'back',left:'strafeLeft',right:'strafeRight'};
+export const SWIPE_DISTANCE=22,TAP_DISTANCE=10,HOLD_SECONDS=.16,TAP_SECONDS=HOLD_SECONDS,LOOK_PIXELS=110,LOOK_TURN=1.3;
+const FLICK={up:'forward',down:'back',left:'strafeLeft',right:'strafeRight'},HELD={up:'forward',down:'turnAround',left:'look',right:'look'};
 export function swipeDirection(dx,dy){
  if(Math.hypot(dx,dy)<SWIPE_DISTANCE)return null;
  return Math.abs(dy)>=Math.abs(dx)?(dy<0?'up':'down'):(dx<0?'left':'right');
 }
-export function swipeCommand(dx,dy,careful=false){const d=swipeDirection(dx,dy);return d?(careful?CAREFUL:FLICK)[d]:null;}
+export function swipeCommand(dx,dy,held=false){const d=swipeDirection(dx,dy);return d?(held?HELD:FLICK)[d]:null;}
 export class GridGesture {
- constructor(){this.contacts=new Set();this.id=null;this.origin=null;this.started=0;this.command=null;this.careful=false;this.blocked=false;this.moved=false;this.segment=null;this.armed=false;this.taken=null;}
+ constructor(){this.contacts=new Set();this.id=null;this.origin=null;this.lookOrigin=0;this.x=0;this.started=0;this.command=null;this.careful=false;this.blocked=false;this.moved=false;this.segment=null;this.armed=false;this.taken=null;}
  get held(){return this.id!==null;}
  clearOwner(){const id=this.id;this.id=null;this.origin=null;this.command=null;this.careful=false;this.moved=false;this.segment=null;this.armed=false;this.taken=null;return id;}
- // The command to act on now: a one-shot (the about-face) is offered once per slide.
- available(){return this.command&&!(ONE_SHOT.has(this.command)&&this.taken===this.command)?this.command:null;}
+ // The command to act on now: a one-shot (step back, about-face) is offered once per slide. Looking is not a command.
+ available(){return this.command&&this.command!=='look'&&!(ONE_SHOT.has(this.command)&&this.taken===this.command)?this.command:null;}
  take(command){if(ONE_SHOT.has(command))this.taken=command;}
+ // Look-around amount: 0 at the start of the look, ±1 at LOOK_DEGREES, beyond ±LOOK_TURN a quarter turn is due.
+ get look(){return this.held&&this.command==='look'?(this.x-this.lookOrigin)/LOOK_PIXELS:0;}
+ // After a turn the look starts again from the finger's place, so dragging on keeps looking from the new heading.
+ rebaseLook(){this.lookOrigin=this.x;this.rebased=true;}
  reset(){const id=this.clearOwner();this.contacts.clear();this.blocked=false;return id;}
  begin(e,bounds,now){
   if(e.button>0)return false;
@@ -187,9 +194,9 @@ export class GridGesture {
    if(this.blocked)return false;
   }
   if(this.held||e.clientY-bounds.top<bounds.height*.5)return false;
-  this.id=e.pointerId;this.origin={x:e.clientX,y:e.clientY};this.started=now;this.command=null;this.careful=false;this.moved=false;this.segment=null;this.armed=false;this.taken=null;return true;
+  this.id=e.pointerId;this.origin={x:e.clientX,y:e.clientY};this.x=e.clientX;this.lookOrigin=e.clientX;this.started=now;this.command=null;this.careful=false;this.moved=false;this.segment=null;this.armed=false;this.taken=null;this.rebased=false;return true;
  }
- // A still press that has lasted HOLD_SECONDS arms careful walking. Returns true once, when it arms (time to click).
+ // A still press that has lasted HOLD_SECONDS arms the held mode. Returns true once, when it arms (time to click).
  arm(now){
   if(!this.held||this.armed||this.moved||this.command||now-this.started<HOLD_SECONDS)return false;
   this.armed=true;return true;
@@ -197,22 +204,28 @@ export class GridGesture {
  move(e,now){
   if(e.pointerId!==this.id)return false;
   if(e.pointerType==='mouse'&&(e.buttons&1)===0){this.end(e,now);return false;}
+  this.x=e.clientX;
   const dx=e.clientX-this.origin.x,dy=e.clientY-this.origin.y;
   if(Math.hypot(dx,dy)>TAP_DISTANCE)this.moved=true;
   const direction=swipeDirection(dx,dy);
-  // Each new slide direction decides once, on the events' own times: early is a flick, after HOLD_SECONDS it walks
-  // carefully. (The click is only the audible sign of the same threshold.)
-  if(direction!==this.segment){this.segment=direction;this.careful=!!direction&&now-this.started>=HOLD_SECONDS;}
-  this.command=direction?(this.careful?CAREFUL:FLICK)[direction]:null;
+  // Each new slide direction decides once, on the events' own times: early is a flick, after HOLD_SECONDS it is held.
+  // A look measures from the origin, so the view starts turning as soon as the finger leaves it.
+  if(direction!==this.segment){
+   const wasLook=this.command==='look';
+   this.segment=direction;this.careful=!!direction&&now-this.started>=HOLD_SECONDS;
+   // After a turn in this press, a new look starts from where the finger is, never from the old origin.
+   if(this.careful&&(direction==='left'||direction==='right')&&!wasLook)this.lookOrigin=this.rebased?this.x:this.origin.x;
+  }
+  this.command=direction?(this.careful?HELD:FLICK)[direction]:null;
   if(this.command!==this.taken)this.taken=null;
   return true;
  }
  // Returns 'tap' when the release was a short, still press; otherwise true/false for ownership.
+ // Judged on the events' own times: a busy frame that delays the release (and may already have clicked) never
+ // turns a quick tap into a press.
  end(e,now){
   this.contacts.delete(e.pointerId);if(!this.contacts.size)this.blocked=false;
   if(e.pointerId!==this.id)return false;
-  // Judged on the events' own times: a busy frame that delays the release (and may already have clicked) never
-  // turns a quick tap into a press.
   const tap=!this.moved&&!this.command&&now-this.started<TAP_SECONDS;
   this.clearOwner();return tap?'tap':true;
  }
