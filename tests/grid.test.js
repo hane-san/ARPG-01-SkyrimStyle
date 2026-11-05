@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {height,walkable,landmarks} from '../dist/terrain.js';
 import {CollisionWorld,circleCollider} from '../dist/movement.js';
 import {routes} from '../dist/terrain.js';
-import {LOOK_PIXELS,LOOK_TURN,STROLL_STEP_SECONDS,ONE_SHOT,TURN_AROUND_SECONDS,CELL,GRID_ORIGIN,STEP_SECONDS,TURN_SECONDS,HOLD_SECONDS,HEADINGS,headingYaw,nearestHeading,hermite,GridWalker,GridGesture,keyCommand,swipeCommand,automapCells,gridCells,gridRoute} from '../dist/grid.js';
+import {LOOK_PIXELS_PER_QUARTER,SIDE_STEP_SECONDS,STROLL_STEP_SECONDS,ONE_SHOT,TURN_AROUND_SECONDS,CELL,GRID_ORIGIN,STEP_SECONDS,TURN_SECONDS,HOLD_SECONDS,HEADINGS,headingYaw,nearestHeading,hermite,GridWalker,GridGesture,keyCommand,swipeCommand,automapCells,gridCells,gridRoute} from '../dist/grid.js';
 
 const flat=(obstacles=[],dry=()=>true)=>new CollisionWorld(obstacles,{height:()=>1,walkable:dry});
 const run=(w,seconds)=>{for(let t=0;t<seconds;t+=1/60)w.update(1/60);};
@@ -59,7 +59,7 @@ test('every landmark on the real island is reachable on the 3 m grid from the la
 test('keys and slides map to the same six commands',()=>{
  assert.equal(keyCommand('KeyW'),'forward');assert.equal(keyCommand('ArrowDown'),'back');assert.equal(keyCommand('KeyA'),'strafeLeft');
  assert.equal(keyCommand('KeyE'),'turnRight');assert.equal(keyCommand('ArrowLeft'),'turnLeft');assert.equal(keyCommand('ShiftLeft'),null);
- assert.equal(swipeCommand(0,-10),null);assert.equal(swipeCommand(4,-40),'forward');assert.equal(swipeCommand(-3,40),'back');assert.equal(swipeCommand(-3,40,true),'turnAround');assert.equal(swipeCommand(-40,10,true),'look');assert.equal(swipeCommand(4,-40,true),'forward');
+ assert.equal(swipeCommand(0,-10),null);assert.equal(swipeCommand(4,-40),'forward');assert.equal(swipeCommand(-3,40),'back');assert.equal(swipeCommand(-3,40,true),'back');assert.equal(swipeCommand(-40,10,true),'look');assert.equal(swipeCommand(4,-40,true),'forward');
  assert.equal(swipeCommand(-40,10),'strafeLeft');assert.equal(swipeCommand(40,-10),'strafeRight');
 });
 
@@ -104,28 +104,43 @@ test('a held walk glides between cells at constant speed and eases out on releas
  assert.equal(back,false);assert.equal(r.z,-CELL);
 });
 
-test('a flick moves you, a held slide turns your head; the hold arms once and a tap never arms',()=>{
+test('a flick moves you, a held sideways slide looks around continuously and can walk where it looks',()=>{
  const g=new GridGesture(),b={top:0,height:800},touch=(id,x,y)=>({pointerId:id,pointerType:'touch',clientX:x,clientY:y,button:0,buttons:1,isPrimary:true});
- // Flicks: sideways side-steps (repeating while held), down steps back (offered once per slide), up walks.
+ // Flicks: sideways side-steps (gliding on while held), down steps back (offered once per slide), up walks.
  g.begin(touch(1,200,600),b,0);g.move(touch(1,250,600),.08);assert.equal(g.available(),'strafeRight');assert.equal(g.careful,false);g.end(touch(1,250,600),.2);
- g.begin(touch(2,200,600),b,0);g.move(touch(2,200,660),.08);assert.equal(g.available(),'back');g.take('back');assert.equal(g.available(),null);
- g.move(touch(2,200,690),1);assert.equal(g.available(),null);g.end(touch(2,200,690),1.1);
- // Held press: arms once at HOLD_SECONDS (the click). Then sideways looks: 0 at the origin, 1 at LOOK_PIXELS.
- g.begin(touch(3,200,600),b,0);assert.equal(g.arm(HOLD_SECONDS-.01),false);assert.equal(g.arm(HOLD_SECONDS+.01),true);assert.equal(g.arm(HOLD_SECONDS+.2),false);
- g.move(touch(3,200+LOOK_PIXELS/2,602),HOLD_SECONDS+.3);assert.equal(g.command,'look');assert.equal(g.available(),null);assert.ok(Math.abs(g.look-.5)<1e-9);
- g.move(touch(3,200+LOOK_PIXELS*LOOK_TURN,602),.6);assert.ok(g.look>=LOOK_TURN);
- // After a turn the look starts again from the finger's place.
- g.rebaseLook();assert.equal(g.look,0);g.move(touch(3,200+LOOK_PIXELS*LOOK_TURN-LOOK_PIXELS*.5,602),.7);assert.ok(Math.abs(g.look+.5)<1e-9);
- // Held then down: about-face (once); held then up: stroll forward.
- g.move(touch(3,200,690),1);assert.equal(g.available(),'turnAround');g.take('turnAround');assert.equal(g.available(),null);
- g.move(touch(3,202,520),1.2);assert.equal(g.available(),'forward');assert.equal(g.careful,true);assert.equal(g.look,0);g.end(touch(3,202,520),1.3);
- // Walking forward and then sliding sideways only glances: it looks, it never side-steps.
- g.begin(touch(4,200,600),b,0);g.move(touch(4,200,540),.08);assert.equal(g.command,'forward');assert.equal(g.careful,false);
- g.move(touch(4,290,560),.8);assert.equal(g.command,'look');assert.equal(g.available(),null);g.end(touch(4,290,560),.9);
- // A tap is a quick still press; a still press long enough to arm is not a tap; a press that moves first never clicks.
- g.begin(touch(5,200,600),b,0);assert.equal(g.end(touch(5,200,600),.08),'tap');
- g.begin(touch(6,200,600),b,0);g.arm(.3);assert.equal(g.end(touch(6,200,600),.35),true);
+ g.begin(touch(2,200,600),b,0);g.move(touch(2,200,660),.08);assert.equal(g.available(),'back');g.take('back');assert.equal(g.available(),null);g.end(touch(2,200,690),1.1);
+ // Held then down is a step back too: nothing spins you round by accident.
+ g.begin(touch(3,200,600),b,0);g.move(touch(3,200,660),.5);assert.equal(g.available(),'back');g.end(touch(3,200,660),.6);
+ // Held press arms once; a sideways slide then looks, continuously and without a limit, from where the look began.
+ g.begin(touch(4,200,600),b,0);assert.equal(g.arm(HOLD_SECONDS-.01),false);assert.equal(g.arm(HOLD_SECONDS+.01),true);
+ g.move(touch(4,230,602),HOLD_SECONDS+.1);assert.equal(g.command,'look');assert.equal(g.available(),null);assert.equal(g.look,0);
+ g.move(touch(4,230+LOOK_PIXELS_PER_QUARTER/2,602),.4);assert.ok(Math.abs(g.look-.5)<1e-9);
+ g.move(touch(4,230+LOOK_PIXELS_PER_QUARTER*2,602),.5);assert.ok(Math.abs(g.look-2)<1e-9,'no limit: two quarters of look');
+ // The heading taking a quarter shifts the reference, so the look (and the view) do not jump.
+ g.shiftLook(1);assert.ok(Math.abs(g.look-1)<1e-9);
+ // Swinging back through the origin keeps looking (now to the left).
+ g.move(touch(4,150,602),.6);assert.equal(g.command,'look');assert.ok(g.look<0);
+ // Sliding the finger up while looking walks forward, and the look goes on.
+ g.move(touch(4,150,560),.7);assert.equal(g.available(),'forward');assert.equal(g.command,'look');assert.equal(g.careful,true);g.end(touch(4,150,560),.8);
+ // Walking forward and then sliding sideways looks: steering by eye.
+ g.begin(touch(5,200,600),b,0);g.move(touch(5,200,540),.05);assert.equal(g.available(),'forward');assert.equal(g.careful,false);
+ g.move(touch(5,290,560),.8);assert.equal(g.command,'look');g.end(touch(5,290,560),.9);
+ // A tap is a quick still press; a press that moves first never clicks.
+ g.begin(touch(6,200,600),b,0);assert.equal(g.end(touch(6,200,600),.08),'tap');
  g.begin(touch(7,200,600),b,0);g.move(touch(7,200,560),.05);assert.equal(g.arm(1),false);g.end(touch(7,200,560),1.1);
+});
+
+test('re-aiming the heading by looking keeps the camera exactly where it was',()=>{
+ const w=new GridWalker(flat(),{origin:[0,0]}),look=-Math.PI/4-.05,view=w.yaw+look;
+ assert.equal(w.reaim(1),true);assert.equal(w.heading,1);assert.ok(Math.abs((w.yaw+look+Math.PI/2)-view)<1e-12);
+ assert.equal(w.command('forward'),'step');run(w,STEP_SECONDS+.05);assert.deepEqual([w.i,w.j],[1,0],'walks the new heading');
+ w.command('turnLeft');w.update(1/60);assert.equal(w.reaim(1),false,'no re-aim during a keyboard turn');
+});
+
+test('a held side-step glides on at a calm, steady pace',()=>{
+ const w=new GridWalker(flat(),{origin:[0,0]}),speeds=[];
+ for(let tick=0;w.steps<4||w.action;tick++){w.update(1/240);if(!w.action&&w.steps<4)w.command('strafeRight',{side:true,hold:true});if(w.steps>=2&&w.steps<4)speeds.push(w.speed);}
+ assert.equal(w.i,4);const cruise=CELL/SIDE_STEP_SECONDS;for(const v of speeds.slice(2,-2))assert.ok(Math.abs(v-cruise)<cruise*.02,v);
 });
 
 test('a turn from a look starts where the view is and lands exactly on the heading, in proportion of the time',()=>{
@@ -153,7 +168,8 @@ test('a careful step eases in and out over a longer time and rests before the ne
 
 test('roads lie on the grid as 4-connected cells and stay walkable from end to end',()=>{
  const world=new CollisionWorld([],{height,walkable}),w=new GridWalker(world);
- assert.deepEqual(gridCells([[8,30],[8+CELL*3,30-CELL*2]]),[[0,0],[1,0],[1,-1],[2,-1],[2,-2],[3,-2]]);
+ // A diagonal leg is laid as a straight run and one turn, not a zigzag.
+ assert.deepEqual(gridCells([[8,30],[8+CELL*3,30-CELL*2]]),[[0,0],[1,0],[2,0],[3,0],[3,-1],[3,-2]]);
  for(const points of routes){
   const cells=gridCells(points,GRID_ORIGIN,CELL,walkable);
   for(let k=1;k<cells.length;k++){

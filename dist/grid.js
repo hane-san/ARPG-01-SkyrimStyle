@@ -2,7 +2,7 @@
 // No DOM, WebGL or audio. The world supplies walkable(), height() and the swept move() of CollisionWorld.
 // 4.5 m cells. A held walk glides through cells at a constant 18.75 m/s (Shift: about 26 m/s);
 // it eases in from rest and eases out when the finger or key lets go, instead of pausing at every cell.
-export const CELL=6,GRID_ORIGIN=Object.freeze([8,30]),STEP_SECONDS=.32,QUICK_STEP_SECONDS=.23,TURN_SECONDS=.55,TURN_AROUND_SECONDS=.95,TURN_REPEAT_PAUSE=.2,SLOW_STEP_SECONDS=.4,SLOW_REST_SECONDS=.1,STROLL_STEP_SECONDS=.42,LOOK_DEGREES=45,BUMP_SECONDS=.26,EYE_HEIGHT=1.65,EYE_SETTLE_SECONDS=.1,EYE_FLOOR=1.4,EYE_SPREAD=2.6;
+export const CELL=7.5,GRID_ORIGIN=Object.freeze([8,30]),STEP_SECONDS=.4,QUICK_STEP_SECONDS=.29,TURN_SECONDS=.55,TURN_AROUND_SECONDS=.95,TURN_REPEAT_PAUSE=.2,SLOW_STEP_SECONDS=.45,SLOW_REST_SECONDS=.1,STROLL_STEP_SECONDS=.52,SIDE_STEP_SECONDS=.46,BUMP_SECONDS=.26,EYE_HEIGHT=1.65,EYE_SETTLE_SECONDS=.1,EYE_FLOOR=1.4,EYE_SPREAD=2.6;
 // Headings are compass quarters: 0 north (-z), 1 east (+x), 2 south (+z), 3 west (-x).
 export const HEADINGS=Object.freeze([[0,-1],[1,0],[0,1],[-1,0]]);
 export const HEADING_NAMES=Object.freeze(['北','東','南','西']);
@@ -53,7 +53,8 @@ export class GridWalker {
  // slow: one eased cell (a flicked side-step or step back), with a short rest before the next one.
  // stroll: the held-press walk forward, gliding without stops at a gentler pace.
  // look: the current look-around offset (radians); a turn starts from where the view already is and lands on the heading.
- command(name,{quick=false,hold=false,slow=false,stroll=false,look=0}={}){
+ // side: a flicked side-step; held, it glides on sideways like the walk forward, at a calmer pace.
+ command(name,{quick=false,hold=false,slow=false,stroll=false,side=false,look=0}={}){
   // The pause after a turn only spaces out repeated turns: a step may start straight away.
   if(this.action!==null||!COMMANDS.includes(name)||(this.cooldown>0&&TURN_COMMANDS.has(name))||(slow&&this.rest>0))return null;
   const carry=this.carry;this.carry=null;
@@ -72,7 +73,7 @@ export class GridWalker {
    this.bumps++;this.action={kind:'bump',t:0,duration:BUMP_SECONDS,ax,az,dx,dz};return 'blocked';
   }
   this.i=ni;this.j=nj;this.visited.add(this.key(ni,nj));this.steps++;
-  const duration=slow?SLOW_STEP_SECONDS:stroll?STROLL_STEP_SECONDS:quick?QUICK_STEP_SECONDS:STEP_SECONDS;
+  const duration=slow?SLOW_STEP_SECONDS:side?SIDE_STEP_SECONDS:stroll?STROLL_STEP_SECONDS:quick?QUICK_STEP_SECONDS:STEP_SECONDS;
   // Arriving speed carries into a step in the same direction, so a held walk never pauses between cells.
   const m0=!slow&&carry&&carry.dx===dx&&carry.dz===dz?Math.min(1.6,carry.speed*duration/this.cell):0;
   this.action={kind:'step',t:0,duration,ax,az,bx,bz,dx,dz,s0:0,m0,m1:hold&&!slow?1:0,slow};
@@ -83,6 +84,12 @@ export class GridWalker {
    this.travelled+=Math.hypot(this.x-px,this.z-pz);this.speed=this.travelled/carry.frame;
   }
   return 'step';
+ }
+ // Looking around re-aims the heading without moving the view: the heading becomes the nearest quarter of where the
+ // view points, and the yaw takes the same quarter so the camera (heading yaw + look) stays exactly where it was.
+ reaim(quarters){
+  if(this.action&&this.action.kind==='turn')return false;
+  this.heading=(this.heading+quarters+4)%4;this.yaw-=quarters*Math.PI/2;this.turns++;return true;
  }
  // The held input ended or changed: finish the current step by slowing to a stop on its cell.
  easeOut(){
@@ -122,24 +129,31 @@ export class GridWalker {
  }
 }
 
-// Roads follow the grid: each route vertex snaps to its cell, and each leg becomes a 4-connected staircase
-// of cell centres that stays within half a cell of the original line.
-// With `walkable`, a vertex snaps to the nearest of its four surrounding cells whose centre is dry land, so a road
-// that ends at the water's edge never ends in the sea.
+// Roads follow the grid: each route vertex snaps to its cell, and each leg becomes 4-connected cells. Diagonal legs are
+// split into pieces of at most ROAD_RUN cells along their longer axis, each laid as one straight run and one turn, so a
+// road reads as calm straight stretches rather than a zigzag, and stays within a few cells of the original line.
+export const ROAD_RUN=3;
 export function gridCells(points,origin=GRID_ORIGIN,cell=CELL,walkable=null){
- const snap=([x,z])=>{
+ const toCell=([x,z])=>{
   const u=(x-origin[0])/cell,v=(z-origin[1])/cell,round=[Math.round(u),Math.round(v)];
   if(!walkable)return round;
   const options=[[Math.floor(u),Math.floor(v)],[Math.ceil(u),Math.floor(v)],[Math.floor(u),Math.ceil(v)],[Math.ceil(u),Math.ceil(v)]].sort((a,b)=>Math.hypot(a[0]-u,a[1]-v)-Math.hypot(b[0]-u,b[1]-v));
   return options.find(([i,j])=>walkable(origin[0]+i*cell,origin[1]+j*cell))||round;
  };
- const cells=[snap(points[0])];
+ const dry=([i,j])=>!walkable||walkable(origin[0]+i*cell,origin[1]+j*cell);
+ const stair=(a,b)=>{const out=[],di=Math.abs(b[0]-a[0]),dj=Math.abs(b[1]-a[1]),si=Math.sign(b[0]-a[0]),sj=Math.sign(b[1]-a[1]);let i=0,j=0;while(i<di||j<dj){if(j>=dj||(i<di&&(i+.5)/di<(j+.5)/dj))i++;else j++;out.push([a[0]+si*i,a[1]+sj*j]);}return out;};
+ const ell=(a,b,iFirst)=>{const out=[],si=Math.sign(b[0]-a[0]),sj=Math.sign(b[1]-a[1]);let [i,j]=a;
+  const goI=()=>{while(i!==b[0]){i+=si;out.push([i,j]);}},goJ=()=>{while(j!==b[1]){j+=sj;out.push([i,j]);}};
+  if(iFirst){goI();goJ();}else{goJ();goI();}return out;};
+ const cells=[toCell(points[0])];
  for(let k=1;k<points.length;k++){
-  const [ai,aj]=cells[cells.length-1],[bi,bj]=snap(points[k]),di=Math.abs(bi-ai),dj=Math.abs(bj-aj),si=Math.sign(bi-ai),sj=Math.sign(bj-aj);
-  let i=0,j=0;
-  while(i<di||j<dj){
-   if(j>=dj||(i<di&&(i+.5)/di<(j+.5)/dj))i++;else j++;
-   cells.push([ai+si*i,aj+sj*j]);
+  const a=cells[cells.length-1],b=toCell(points[k]),di=b[0]-a[0],dj=b[1]-a[1],pieces=Math.max(1,Math.ceil(Math.max(Math.abs(di),Math.abs(dj))/ROAD_RUN));
+  let from=a;
+  for(let p=1;p<=pieces;p++){
+   const to=p===pieces?b:[a[0]+Math.round(di*p/pieces),a[1]+Math.round(dj*p/pieces)];
+   const iFirst=Math.abs(di)>=Math.abs(dj),first=ell(from,to,iFirst),second=ell(from,to,!iFirst);
+   cells.push(...(first.every(dry)?first:second.every(dry)?second:stair(from,to)));
+   from=to;
   }
  }
  return cells;
@@ -159,16 +173,18 @@ export function gridRoute(points,origin=GRID_ORIGIN,cell=CELL,walkable=null){
 const KEY_COMMANDS={KeyX:'turnAround',KeyW:'forward',ArrowUp:'forward',KeyS:'back',ArrowDown:'back',KeyA:'strafeLeft',KeyD:'strafeRight',KeyQ:'turnLeft',ArrowLeft:'turnLeft',KeyE:'turnRight',ArrowRight:'turnRight'};
 export function keyCommand(code){return KEY_COMMANDS[code]||null;}
 
-// Touch: one finger in the lower half. The rule fits in one sentence: a flick moves you, a held slide turns your head.
-// - A quick flick (a slide that starts within HOLD_SECONDS): up walks forward (gliding while held), left/right
-//   side-step one cell (repeating one cell at a time while held), down steps back one cell (once per slide).
-// - A held press (the game clicks when it arms) and then a slide: left/right look around, the view following the finger
-//   up to LOOK_DEGREES; pulling further clicks again and turns a quarter (the look continues from the new heading).
-//   Down turns right round (once). Up strolls forward without stopping, at a gentler pace.
-// - Walking forward and then sliding sideways looks around too: a drifting finger only glances, it never side-steps.
+// Touch: one finger in the lower half. A flick moves you; a held slide moves your eyes.
+// - A quick flick (a slide that starts within HOLD_SECONDS): up walks forward, left/right side-step, down steps back
+//   once. Up and the side-steps glide on while the finger stays down.
+// - A held press (the game clicks when it arms) and then a sideways slide looks around, the view following the finger
+//   continuously like an ordinary 3D game (LOOK_PIXELS_PER_QUARTER per 90 degrees, no limit). Whenever the view points
+//   closer to a neighbouring direction, that becomes the heading (a soft tick), so walking on goes where you look.
+//   Letting go settles the view on the heading. While looking, sliding the finger up as well walks forward that way.
+//   Held then up strolls forward; held then down steps back.
+// - Walking forward and then sliding sideways looks too: steer by looking, as in an ordinary 3D game.
 // A short still tap is one step forward.
-export const SWIPE_DISTANCE=22,TAP_DISTANCE=10,HOLD_SECONDS=.16,TAP_SECONDS=HOLD_SECONDS,LOOK_PIXELS=110,LOOK_TURN=1.3;
-const FLICK={up:'forward',down:'back',left:'strafeLeft',right:'strafeRight'},HELD={up:'forward',down:'turnAround',left:'look',right:'look'};
+export const SWIPE_DISTANCE=22,TAP_DISTANCE=10,HOLD_SECONDS=.12,TAP_SECONDS=HOLD_SECONDS,LOOK_PIXELS_PER_QUARTER=150;
+const FLICK={up:'forward',down:'back',left:'strafeLeft',right:'strafeRight'},HELD={up:'forward',down:'back',left:'look',right:'look'};
 export function swipeDirection(dx,dy){
  if(Math.hypot(dx,dy)<SWIPE_DISTANCE)return null;
  return Math.abs(dy)>=Math.abs(dx)?(dy<0?'up':'down'):(dx<0?'left':'right');
@@ -177,14 +193,14 @@ export function swipeCommand(dx,dy,held=false){const d=swipeDirection(dx,dy);ret
 export class GridGesture {
  constructor(){this.contacts=new Set();this.id=null;this.origin=null;this.lookOrigin=0;this.x=0;this.started=0;this.command=null;this.careful=false;this.blocked=false;this.moved=false;this.segment=null;this.armed=false;this.taken=null;}
  get held(){return this.id!==null;}
- clearOwner(){const id=this.id;this.id=null;this.origin=null;this.command=null;this.careful=false;this.moved=false;this.segment=null;this.armed=false;this.taken=null;return id;}
- // The command to act on now: a one-shot (step back, about-face) is offered once per slide. Looking is not a command.
- available(){return this.command&&this.command!=='look'&&!(ONE_SHOT.has(this.command)&&this.taken===this.command)?this.command:null;}
+ clearOwner(){const id=this.id;this.id=null;this.origin=null;this.command=null;this.careful=false;this.moved=false;this.segment=null;this.armed=false;this.taken=null;this.looking=false;this.lookWalk=false;return id;}
+ // The command to act on now: a one-shot (the step back) is offered once per slide. Looking is not a command.
+ available(){if(this.command==='look')return this.lookWalk?'forward':null;return this.command&&!(ONE_SHOT.has(this.command)&&this.taken===this.command)?this.command:null;}
  take(command){if(ONE_SHOT.has(command))this.taken=command;}
- // Look-around amount: 0 at the start of the look, ±1 at LOOK_DEGREES, beyond ±LOOK_TURN a quarter turn is due.
- get look(){return this.held&&this.command==='look'?(this.x-this.lookOrigin)/LOOK_PIXELS:0;}
- // After a turn the look starts again from the finger's place, so dragging on keeps looking from the new heading.
- rebaseLook(){this.lookOrigin=this.x;this.rebased=true;}
+ // How far the eyes have turned, in quarters (positive = right). Continuous and unlimited while looking.
+ get look(){return this.held&&this.command==='look'?(this.x-this.lookOrigin)/LOOK_PIXELS_PER_QUARTER:0;}
+ // When the heading takes a quarter of the look, the finger's reference moves with it, so the view does not jump.
+ shiftLook(quarters){this.lookOrigin+=quarters*LOOK_PIXELS_PER_QUARTER;}
  reset(){const id=this.clearOwner();this.contacts.clear();this.blocked=false;return id;}
  begin(e,bounds,now){
   if(e.button>0)return false;
@@ -194,7 +210,7 @@ export class GridGesture {
    if(this.blocked)return false;
   }
   if(this.held||e.clientY-bounds.top<bounds.height*.5)return false;
-  this.id=e.pointerId;this.origin={x:e.clientX,y:e.clientY};this.x=e.clientX;this.lookOrigin=e.clientX;this.started=now;this.command=null;this.careful=false;this.moved=false;this.segment=null;this.armed=false;this.taken=null;this.rebased=false;return true;
+  this.id=e.pointerId;this.origin={x:e.clientX,y:e.clientY};this.x=e.clientX;this.lookOrigin=e.clientX;this.started=now;this.command=null;this.careful=false;this.moved=false;this.segment=null;this.armed=false;this.taken=null;this.looking=false;this.lookWalk=false;return true;
  }
  // A still press that has lasted HOLD_SECONDS arms the held mode. Returns true once, when it arms (time to click).
  arm(now){
@@ -204,25 +220,24 @@ export class GridGesture {
  move(e,now){
   if(e.pointerId!==this.id)return false;
   if(e.pointerType==='mouse'&&(e.buttons&1)===0){this.end(e,now);return false;}
-  this.x=e.clientX;
   const dx=e.clientX-this.origin.x,dy=e.clientY-this.origin.y;
   if(Math.hypot(dx,dy)>TAP_DISTANCE)this.moved=true;
   const direction=swipeDirection(dx,dy);
   // Each new slide direction decides once, on the events' own times: early is a flick, after HOLD_SECONDS it is held.
-  // A look measures from the origin, so the view starts turning as soon as the finger leaves it.
-  if(direction!==this.segment){
-   const wasLook=this.command==='look';
-   this.segment=direction;this.careful=!!direction&&now-this.started>=HOLD_SECONDS;
-   // After a turn in this press, a new look starts from where the finger is, never from the old origin.
-   if(this.careful&&(direction==='left'||direction==='right')&&!wasLook)this.lookOrigin=this.rebased?this.x:this.origin.x;
-  }
-  this.command=direction?(this.careful?HELD:FLICK)[direction]:null;
+  if(direction!==this.segment){this.segment=direction;this.careful=!!direction&&now-this.started>=HOLD_SECONDS;}
+  const sideways=direction==='left'||direction==='right';
+  // A held sideways slide starts a look, measured from where the finger is then, so the view never jumps as it starts.
+  // Once looking, the look goes on (even back through the origin) until the finger lifts. While looking, the finger's
+  // rise above where the look began walks forward, so you can look and walk at once, steering by the view.
+  if(!this.looking&&this.careful&&sideways){this.looking=true;this.lookOrigin=e.clientX;this.lookY=e.clientY;}
+  this.x=e.clientX;
+  if(this.looking)this.lookWalk=this.lookY-e.clientY>SWIPE_DISTANCE;
+  this.command=this.looking?'look':direction?(this.careful?HELD:FLICK)[direction]:null;
   if(this.command!==this.taken)this.taken=null;
   return true;
  }
  // Returns 'tap' when the release was a short, still press; otherwise true/false for ownership.
- // Judged on the events' own times: a busy frame that delays the release (and may already have clicked) never
- // turns a quick tap into a press.
+ // Judged on the events' own times: a busy frame that delays the release never turns a quick tap into a press.
  end(e,now){
   this.contacts.delete(e.pointerId);if(!this.contacts.size)this.blocked=false;
   if(e.pointerId!==this.id)return false;

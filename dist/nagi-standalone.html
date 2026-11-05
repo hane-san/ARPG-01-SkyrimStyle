@@ -471,7 +471,7 @@ class JourneyNotices {
 // No DOM, WebGL or audio. The world supplies walkable(), height() and the swept move() of CollisionWorld.
 // 4.5 m cells. A held walk glides through cells at a constant 18.75 m/s (Shift: about 26 m/s);
 // it eases in from rest and eases out when the finger or key lets go, instead of pausing at every cell.
-const CELL=6,GRID_ORIGIN=Object.freeze([8,30]),STEP_SECONDS=.32,QUICK_STEP_SECONDS=.23,TURN_SECONDS=.55,TURN_AROUND_SECONDS=.95,TURN_REPEAT_PAUSE=.2,SLOW_STEP_SECONDS=.4,SLOW_REST_SECONDS=.1,STROLL_STEP_SECONDS=.42,LOOK_DEGREES=45,BUMP_SECONDS=.26,EYE_HEIGHT=1.65,EYE_SETTLE_SECONDS=.1,EYE_FLOOR=1.4,EYE_SPREAD=2.6;
+const CELL=7.5,GRID_ORIGIN=Object.freeze([8,30]),STEP_SECONDS=.4,QUICK_STEP_SECONDS=.29,TURN_SECONDS=.55,TURN_AROUND_SECONDS=.95,TURN_REPEAT_PAUSE=.2,SLOW_STEP_SECONDS=.45,SLOW_REST_SECONDS=.1,STROLL_STEP_SECONDS=.52,SIDE_STEP_SECONDS=.46,BUMP_SECONDS=.26,EYE_HEIGHT=1.65,EYE_SETTLE_SECONDS=.1,EYE_FLOOR=1.4,EYE_SPREAD=2.6;
 // Headings are compass quarters: 0 north (-z), 1 east (+x), 2 south (+z), 3 west (-x).
 const HEADINGS=Object.freeze([[0,-1],[1,0],[0,1],[-1,0]]);
 const HEADING_NAMES=Object.freeze(['北','東','南','西']);
@@ -522,7 +522,8 @@ class GridWalker {
  // slow: one eased cell (a flicked side-step or step back), with a short rest before the next one.
  // stroll: the held-press walk forward, gliding without stops at a gentler pace.
  // look: the current look-around offset (radians); a turn starts from where the view already is and lands on the heading.
- command(name,{quick=false,hold=false,slow=false,stroll=false,look=0}={}){
+ // side: a flicked side-step; held, it glides on sideways like the walk forward, at a calmer pace.
+ command(name,{quick=false,hold=false,slow=false,stroll=false,side=false,look=0}={}){
   // The pause after a turn only spaces out repeated turns: a step may start straight away.
   if(this.action!==null||!COMMANDS.includes(name)||(this.cooldown>0&&TURN_COMMANDS.has(name))||(slow&&this.rest>0))return null;
   const carry=this.carry;this.carry=null;
@@ -541,7 +542,7 @@ class GridWalker {
    this.bumps++;this.action={kind:'bump',t:0,duration:BUMP_SECONDS,ax,az,dx,dz};return 'blocked';
   }
   this.i=ni;this.j=nj;this.visited.add(this.key(ni,nj));this.steps++;
-  const duration=slow?SLOW_STEP_SECONDS:stroll?STROLL_STEP_SECONDS:quick?QUICK_STEP_SECONDS:STEP_SECONDS;
+  const duration=slow?SLOW_STEP_SECONDS:side?SIDE_STEP_SECONDS:stroll?STROLL_STEP_SECONDS:quick?QUICK_STEP_SECONDS:STEP_SECONDS;
   // Arriving speed carries into a step in the same direction, so a held walk never pauses between cells.
   const m0=!slow&&carry&&carry.dx===dx&&carry.dz===dz?Math.min(1.6,carry.speed*duration/this.cell):0;
   this.action={kind:'step',t:0,duration,ax,az,bx,bz,dx,dz,s0:0,m0,m1:hold&&!slow?1:0,slow};
@@ -552,6 +553,12 @@ class GridWalker {
    this.travelled+=Math.hypot(this.x-px,this.z-pz);this.speed=this.travelled/carry.frame;
   }
   return 'step';
+ }
+ // Looking around re-aims the heading without moving the view: the heading becomes the nearest quarter of where the
+ // view points, and the yaw takes the same quarter so the camera (heading yaw + look) stays exactly where it was.
+ reaim(quarters){
+  if(this.action&&this.action.kind==='turn')return false;
+  this.heading=(this.heading+quarters+4)%4;this.yaw-=quarters*Math.PI/2;this.turns++;return true;
  }
  // The held input ended or changed: finish the current step by slowing to a stop on its cell.
  easeOut(){
@@ -591,24 +598,31 @@ class GridWalker {
  }
 }
 
-// Roads follow the grid: each route vertex snaps to its cell, and each leg becomes a 4-connected staircase
-// of cell centres that stays within half a cell of the original line.
-// With `walkable`, a vertex snaps to the nearest of its four surrounding cells whose centre is dry land, so a road
-// that ends at the water's edge never ends in the sea.
+// Roads follow the grid: each route vertex snaps to its cell, and each leg becomes 4-connected cells. Diagonal legs are
+// split into pieces of at most ROAD_RUN cells along their longer axis, each laid as one straight run and one turn, so a
+// road reads as calm straight stretches rather than a zigzag, and stays within a few cells of the original line.
+const ROAD_RUN=3;
 function gridCells(points,origin=GRID_ORIGIN,cell=CELL,walkable=null){
- const snap=([x,z])=>{
+ const toCell=([x,z])=>{
   const u=(x-origin[0])/cell,v=(z-origin[1])/cell,round=[Math.round(u),Math.round(v)];
   if(!walkable)return round;
   const options=[[Math.floor(u),Math.floor(v)],[Math.ceil(u),Math.floor(v)],[Math.floor(u),Math.ceil(v)],[Math.ceil(u),Math.ceil(v)]].sort((a,b)=>Math.hypot(a[0]-u,a[1]-v)-Math.hypot(b[0]-u,b[1]-v));
   return options.find(([i,j])=>walkable(origin[0]+i*cell,origin[1]+j*cell))||round;
  };
- const cells=[snap(points[0])];
+ const dry=([i,j])=>!walkable||walkable(origin[0]+i*cell,origin[1]+j*cell);
+ const stair=(a,b)=>{const out=[],di=Math.abs(b[0]-a[0]),dj=Math.abs(b[1]-a[1]),si=Math.sign(b[0]-a[0]),sj=Math.sign(b[1]-a[1]);let i=0,j=0;while(i<di||j<dj){if(j>=dj||(i<di&&(i+.5)/di<(j+.5)/dj))i++;else j++;out.push([a[0]+si*i,a[1]+sj*j]);}return out;};
+ const ell=(a,b,iFirst)=>{const out=[],si=Math.sign(b[0]-a[0]),sj=Math.sign(b[1]-a[1]);let [i,j]=a;
+  const goI=()=>{while(i!==b[0]){i+=si;out.push([i,j]);}},goJ=()=>{while(j!==b[1]){j+=sj;out.push([i,j]);}};
+  if(iFirst){goI();goJ();}else{goJ();goI();}return out;};
+ const cells=[toCell(points[0])];
  for(let k=1;k<points.length;k++){
-  const [ai,aj]=cells[cells.length-1],[bi,bj]=snap(points[k]),di=Math.abs(bi-ai),dj=Math.abs(bj-aj),si=Math.sign(bi-ai),sj=Math.sign(bj-aj);
-  let i=0,j=0;
-  while(i<di||j<dj){
-   if(j>=dj||(i<di&&(i+.5)/di<(j+.5)/dj))i++;else j++;
-   cells.push([ai+si*i,aj+sj*j]);
+  const a=cells[cells.length-1],b=toCell(points[k]),di=b[0]-a[0],dj=b[1]-a[1],pieces=Math.max(1,Math.ceil(Math.max(Math.abs(di),Math.abs(dj))/ROAD_RUN));
+  let from=a;
+  for(let p=1;p<=pieces;p++){
+   const to=p===pieces?b:[a[0]+Math.round(di*p/pieces),a[1]+Math.round(dj*p/pieces)];
+   const iFirst=Math.abs(di)>=Math.abs(dj),first=ell(from,to,iFirst),second=ell(from,to,!iFirst);
+   cells.push(...(first.every(dry)?first:second.every(dry)?second:stair(from,to)));
+   from=to;
   }
  }
  return cells;
@@ -628,16 +642,18 @@ function gridRoute(points,origin=GRID_ORIGIN,cell=CELL,walkable=null){
 const KEY_COMMANDS={KeyX:'turnAround',KeyW:'forward',ArrowUp:'forward',KeyS:'back',ArrowDown:'back',KeyA:'strafeLeft',KeyD:'strafeRight',KeyQ:'turnLeft',ArrowLeft:'turnLeft',KeyE:'turnRight',ArrowRight:'turnRight'};
 function keyCommand(code){return KEY_COMMANDS[code]||null;}
 
-// Touch: one finger in the lower half. The rule fits in one sentence: a flick moves you, a held slide turns your head.
-// - A quick flick (a slide that starts within HOLD_SECONDS): up walks forward (gliding while held), left/right
-//   side-step one cell (repeating one cell at a time while held), down steps back one cell (once per slide).
-// - A held press (the game clicks when it arms) and then a slide: left/right look around, the view following the finger
-//   up to LOOK_DEGREES; pulling further clicks again and turns a quarter (the look continues from the new heading).
-//   Down turns right round (once). Up strolls forward without stopping, at a gentler pace.
-// - Walking forward and then sliding sideways looks around too: a drifting finger only glances, it never side-steps.
+// Touch: one finger in the lower half. A flick moves you; a held slide moves your eyes.
+// - A quick flick (a slide that starts within HOLD_SECONDS): up walks forward, left/right side-step, down steps back
+//   once. Up and the side-steps glide on while the finger stays down.
+// - A held press (the game clicks when it arms) and then a sideways slide looks around, the view following the finger
+//   continuously like an ordinary 3D game (LOOK_PIXELS_PER_QUARTER per 90 degrees, no limit). Whenever the view points
+//   closer to a neighbouring direction, that becomes the heading (a soft tick), so walking on goes where you look.
+//   Letting go settles the view on the heading. While looking, sliding the finger up as well walks forward that way.
+//   Held then up strolls forward; held then down steps back.
+// - Walking forward and then sliding sideways looks too: steer by looking, as in an ordinary 3D game.
 // A short still tap is one step forward.
-const SWIPE_DISTANCE=22,TAP_DISTANCE=10,HOLD_SECONDS=.16,TAP_SECONDS=HOLD_SECONDS,LOOK_PIXELS=110,LOOK_TURN=1.3;
-const FLICK={up:'forward',down:'back',left:'strafeLeft',right:'strafeRight'},HELD={up:'forward',down:'turnAround',left:'look',right:'look'};
+const SWIPE_DISTANCE=22,TAP_DISTANCE=10,HOLD_SECONDS=.12,TAP_SECONDS=HOLD_SECONDS,LOOK_PIXELS_PER_QUARTER=150;
+const FLICK={up:'forward',down:'back',left:'strafeLeft',right:'strafeRight'},HELD={up:'forward',down:'back',left:'look',right:'look'};
 function swipeDirection(dx,dy){
  if(Math.hypot(dx,dy)<SWIPE_DISTANCE)return null;
  return Math.abs(dy)>=Math.abs(dx)?(dy<0?'up':'down'):(dx<0?'left':'right');
@@ -646,14 +662,14 @@ function swipeCommand(dx,dy,held=false){const d=swipeDirection(dx,dy);return d?(
 class GridGesture {
  constructor(){this.contacts=new Set();this.id=null;this.origin=null;this.lookOrigin=0;this.x=0;this.started=0;this.command=null;this.careful=false;this.blocked=false;this.moved=false;this.segment=null;this.armed=false;this.taken=null;}
  get held(){return this.id!==null;}
- clearOwner(){const id=this.id;this.id=null;this.origin=null;this.command=null;this.careful=false;this.moved=false;this.segment=null;this.armed=false;this.taken=null;return id;}
- // The command to act on now: a one-shot (step back, about-face) is offered once per slide. Looking is not a command.
- available(){return this.command&&this.command!=='look'&&!(ONE_SHOT.has(this.command)&&this.taken===this.command)?this.command:null;}
+ clearOwner(){const id=this.id;this.id=null;this.origin=null;this.command=null;this.careful=false;this.moved=false;this.segment=null;this.armed=false;this.taken=null;this.looking=false;this.lookWalk=false;return id;}
+ // The command to act on now: a one-shot (the step back) is offered once per slide. Looking is not a command.
+ available(){if(this.command==='look')return this.lookWalk?'forward':null;return this.command&&!(ONE_SHOT.has(this.command)&&this.taken===this.command)?this.command:null;}
  take(command){if(ONE_SHOT.has(command))this.taken=command;}
- // Look-around amount: 0 at the start of the look, ±1 at LOOK_DEGREES, beyond ±LOOK_TURN a quarter turn is due.
- get look(){return this.held&&this.command==='look'?(this.x-this.lookOrigin)/LOOK_PIXELS:0;}
- // After a turn the look starts again from the finger's place, so dragging on keeps looking from the new heading.
- rebaseLook(){this.lookOrigin=this.x;this.rebased=true;}
+ // How far the eyes have turned, in quarters (positive = right). Continuous and unlimited while looking.
+ get look(){return this.held&&this.command==='look'?(this.x-this.lookOrigin)/LOOK_PIXELS_PER_QUARTER:0;}
+ // When the heading takes a quarter of the look, the finger's reference moves with it, so the view does not jump.
+ shiftLook(quarters){this.lookOrigin+=quarters*LOOK_PIXELS_PER_QUARTER;}
  reset(){const id=this.clearOwner();this.contacts.clear();this.blocked=false;return id;}
  begin(e,bounds,now){
   if(e.button>0)return false;
@@ -663,7 +679,7 @@ class GridGesture {
    if(this.blocked)return false;
   }
   if(this.held||e.clientY-bounds.top<bounds.height*.5)return false;
-  this.id=e.pointerId;this.origin={x:e.clientX,y:e.clientY};this.x=e.clientX;this.lookOrigin=e.clientX;this.started=now;this.command=null;this.careful=false;this.moved=false;this.segment=null;this.armed=false;this.taken=null;this.rebased=false;return true;
+  this.id=e.pointerId;this.origin={x:e.clientX,y:e.clientY};this.x=e.clientX;this.lookOrigin=e.clientX;this.started=now;this.command=null;this.careful=false;this.moved=false;this.segment=null;this.armed=false;this.taken=null;this.looking=false;this.lookWalk=false;return true;
  }
  // A still press that has lasted HOLD_SECONDS arms the held mode. Returns true once, when it arms (time to click).
  arm(now){
@@ -673,25 +689,24 @@ class GridGesture {
  move(e,now){
   if(e.pointerId!==this.id)return false;
   if(e.pointerType==='mouse'&&(e.buttons&1)===0){this.end(e,now);return false;}
-  this.x=e.clientX;
   const dx=e.clientX-this.origin.x,dy=e.clientY-this.origin.y;
   if(Math.hypot(dx,dy)>TAP_DISTANCE)this.moved=true;
   const direction=swipeDirection(dx,dy);
   // Each new slide direction decides once, on the events' own times: early is a flick, after HOLD_SECONDS it is held.
-  // A look measures from the origin, so the view starts turning as soon as the finger leaves it.
-  if(direction!==this.segment){
-   const wasLook=this.command==='look';
-   this.segment=direction;this.careful=!!direction&&now-this.started>=HOLD_SECONDS;
-   // After a turn in this press, a new look starts from where the finger is, never from the old origin.
-   if(this.careful&&(direction==='left'||direction==='right')&&!wasLook)this.lookOrigin=this.rebased?this.x:this.origin.x;
-  }
-  this.command=direction?(this.careful?HELD:FLICK)[direction]:null;
+  if(direction!==this.segment){this.segment=direction;this.careful=!!direction&&now-this.started>=HOLD_SECONDS;}
+  const sideways=direction==='left'||direction==='right';
+  // A held sideways slide starts a look, measured from where the finger is then, so the view never jumps as it starts.
+  // Once looking, the look goes on (even back through the origin) until the finger lifts. While looking, the finger's
+  // rise above where the look began walks forward, so you can look and walk at once, steering by the view.
+  if(!this.looking&&this.careful&&sideways){this.looking=true;this.lookOrigin=e.clientX;this.lookY=e.clientY;}
+  this.x=e.clientX;
+  if(this.looking)this.lookWalk=this.lookY-e.clientY>SWIPE_DISTANCE;
+  this.command=this.looking?'look':direction?(this.careful?HELD:FLICK)[direction]:null;
   if(this.command!==this.taken)this.taken=null;
   return true;
  }
  // Returns 'tap' when the release was a short, still press; otherwise true/false for ownership.
- // Judged on the events' own times: a busy frame that delays the release (and may already have clicked) never
- // turns a quick tap into a press.
+ // Judged on the events' own times: a busy frame that delays the release never turns a quick tap into a press.
  end(e,now){
   this.contacts.delete(e.pointerId);if(!this.contacts.size)this.blocked=false;
   if(e.pointerId!==this.id)return false;
@@ -713,11 +728,11 @@ function automapCells(walker,radius){
 const SHORE_REGION=Object.freeze({id:'shore',name:'凪の浜',en:'THE QUIET SHORE',track:'shore',sky:[[.77,.824,.815],[.663,.758,.785]]});
 const REGIONS=Object.freeze([
  {id:'avenue',name:'道のむこうの並木',en:'THE AVENUE BEYOND',x:2,z:12,r:7,track:'avenue',sky:[[.83,.85,.79],[.66,.77,.79]]},
- {id:'greenhouse',name:'硝子の温室',en:'THE GLASS HOUSE',x:-16,z:9,r:9,track:'greenhouse',sky:[[.80,.85,.78],[.64,.77,.76]]},
+ {id:'greenhouse',name:'硝子の温室',en:'THE GLASS HOUSE',x:-22,z:11,r:10,track:'greenhouse',sky:[[.80,.85,.78],[.64,.77,.76]]},
  {id:'shallows',name:'空を映す浅瀬',en:'THE SKY SHALLOWS',x:-33,z:22,r:12,track:'shallows',sky:[[.81,.87,.88],[.60,.76,.86]]},
- {id:'skyvillage',name:'空の集落',en:'THE SKY HAMLET',x:20,z:-12,r:10,track:'skyvillage',sky:[[.79,.86,.88],[.55,.72,.85]]},
- {id:'windmill',name:'かざぐるまの丘',en:'THE PINWHEEL HILL',x:-19,z:-18,r:9,track:'windmill',sky:[[.81,.84,.76],[.65,.76,.77]]},
- {id:'windgate',name:'風鳴りの門',en:'THE SINGING GATE',x:-10,z:-30,r:6,track:'windgate',sky:[[.72,.77,.78],[.55,.63,.69]]},
+ {id:'skyvillage',name:'空の集落',en:'THE SKY HAMLET',x:16,z:-15,r:11,track:'skyvillage',sky:[[.79,.86,.88],[.55,.72,.85]]},
+ {id:'windmill',name:'かざぐるまの丘',en:'THE PINWHEEL HILL',x:-19,z:-22,r:10,track:'windmill',sky:[[.81,.84,.76],[.65,.76,.77]]},
+ {id:'windgate',name:'風鳴りの門',en:'THE SINGING GATE',x:-8,z:-29,r:7,track:'windgate',sky:[[.72,.77,.78],[.55,.63,.69]]},
  {id:'grassroad',name:'風の草原街道',en:'THE WINDING MEADOW ROAD',x:13,z:-48,r:6,track:'grassroad',sky:[[.80,.85,.79],[.62,.75,.80]]},
  {id:'waterside',name:'柳の水辺',en:'THE WILLOW WATER',x:25,z:-49,r:6,track:'waterside',sky:[[.81,.80,.84],[.66,.70,.80]]},
  {id:'riverbank',name:'日曜の岸辺',en:'A SUNDAY SHORE',x:40,z:-58,r:7,track:'riverbank',sky:[[.85,.84,.76],[.66,.75,.80]]},
@@ -934,7 +949,11 @@ const cellCentre=(i,j)=>[GRID_ORIGIN[0]+i*CELL,GRID_ORIGIN[1]+j*CELL];
 // terrain within three cells, with already-taken cells counted as blocked). Sandbars and narrow shores stay passable.
 const terrainSteps=GRID_MODE?new GridWalker(new CollisionWorld([],{height,walkable}),{origin:GRID_ORIGIN,cell:CELL}):null;
 const QUARTERS=[[0,-1],[1,0],[0,1],[-1,0]];
+// A corridor or dead-end cell (two or fewer dry neighbours you can step to) is never taken either: a chain of such cells
+// is how a sandbar or a narrow spit reaches somewhere, and filling it from one end would cut the far end off.
+const corridorCell=(i,j)=>QUARTERS.filter(([di,dj])=>terrainSteps.canStep(i,j,i+di,j+dj)).length<=2;
 function pinchCell(i,j){
+ if(corridorCell(i,j))return true;
  const open=QUARTERS.map(([di,dj])=>[i+di,j+dj]).filter(([a,b])=>!claimedCells.has(a+','+b)&&terrainSteps.canStep(i,j,a,b));
  if(open.length<2)return false;
  const seen=new Set([open[0].join(',')]),queue=[open[0]];
@@ -974,7 +993,7 @@ const [tx,tz]=gatewayCell(23,8),[sx,sz]=gatewayCell(-4,-13);
 // Issue #21 set pieces own these rectangles (x0,x1,z0,z1): no random tree or rock grows inside them in either mode.
 // Set pieces sit on cell centres in both modes, so they fit the grid's cells exactly whatever the cell size.
 const snapCentre=(x,z)=>cellCentre(...cellIndex(x,z)),cellRect=([x,z],i0,i1,j0,j1)=>[x+(i0-.5)*CELL,x+(i1+.5)*CELL,z+(j0-.5)*CELL,z+(j1+.5)*CELL];
-const GLASSHOUSE=snapCentre(-19,5),HAMLET=snapCentre(17,-15),PINWHEELS=snapCentre(-21,-20),POND=snapCentre(-10,-73.5),WINDGATE=snapCentre(-10,-28.5);
+const GLASSHOUSE=snapCentre(-19,5),HAMLET=snapCentre(17,-15),PINWHEELS=snapCentre(-21,-20),POND=snapCentre(-10,-73.5);
 const RESERVED=[cellRect(GLASSHOUSE,-1,1,0,1),cellRect(HAMLET,-1,1,-1,1),cellRect(PINWHEELS,0,1,-1,1),cellRect(POND,0,0,0,0)];
 const reserved=(x,z)=>RESERVED.some(([x0,x1,z0,z1])=>x>=x0&&x<=x1&&z>=z0&&z<=z1);
 if(GRID_MODE)for(const [x0,x1,z0,z1] of RESERVED){const [i0,j0]=cellIndex(x0,z0),[i1,j1]=cellIndex(x1,z1);for(let j=j0;j<=j1;j++)for(let i=i0;i<=i1;i++){const [x,z]=cellCentre(i,j);if(reserved(x,z))claimedCells.add(i+','+j);}}
@@ -1006,7 +1025,7 @@ function terrainColor(x,z){
 // Clip path ribbons to the exact ground triangles: continuous paths without hovering over hills.
 const roadSegments=[];
 for(const points of travelRoutes)for(let i=1;i<points.length;i++){
- const [ax,az]=points[i-1],[bx,bz]=points[i],len=Math.hypot(bx-ax,bz-az),w=GRID_MODE?(Math.min(az,bz)<-128?2.1:1.6):Math.min(az,bz)<-128?4.2:1.45,nx=-(bz-az)/len*w,nz=(bx-ax)/len*w;
+ const [ax,az]=points[i-1],[bx,bz]=points[i],len=Math.hypot(bx-ax,bz-az),w=GRID_MODE?(Math.min(az,bz)<-128?3:2.5):Math.min(az,bz)<-128?4.2:1.45,nx=-(bz-az)/len*w,nz=(bx-ax)/len*w;
  // Grid roads turn square corners: each straight run reaches half a road width past its end.
  const ex=GRID_MODE?(bx-ax)/len*w:0,ez=GRID_MODE?(bz-az)/len*w:0;
  roadSegments.push({polygon:[[ax-ex+nx,az-ez+nz],[bx+ex+nx,bz+ez+nz],[bx+ex-nx,bz+ez-nz],[ax-ex-nx,az-ez-nz]],minX:Math.min(ax,bx)-w,maxX:Math.max(ax,bx)+w,minZ:Math.min(az,bz)-w,maxZ:Math.max(az,bz)+w,ends:[[ax,az],[bx,bz]],w});
@@ -1025,6 +1044,8 @@ function clipRoad(polygon,triangle){
  return out;
 }
 const roadChunks=[];
+// Grid roads are a deeper, trodden earth, so the way stays readable across pale sand and meadow.
+const ROAD_COLOUR=hex(GRID_MODE?'c4b391':'d5cbb1');
 
 const terrainChunks=[];
 for(let tz=WORLD_BOUNDS.minZ;tz<WORLD_BOUNDS.maxZ;tz+=64)for(let tx=WORLD_BOUNDS.minX;tx<WORLD_BOUNDS.maxX;tx+=64){
@@ -1041,7 +1062,7 @@ for(let tz=WORLD_BOUNDS.minZ;tz<WORLD_BOUNDS.maxZ;tz+=64)for(let tx=WORLD_BOUNDS
   if(road.maxX<x||road.minX>x+step||road.maxZ<z||road.minZ>z+step)continue;
   for(const triangle of [[[x,z],[x+step,z],[x,z+step]],[[x+step,z],[x+step,z+step],[x,z+step]]]){
    const p=clipRoad(road.polygon,triangle),point=a=>[a[0],height(a[0],a[1])+.015,a[1]];
-   for(let i=1;i<p.length-1;i++)tri(point(p[0]),point(p[i]),point(p[i+1]),hex('d5cbb1'));
+   for(let i=1;i<p.length-1;i++)tri(point(p[0]),point(p[i]),point(p[i+1]),ROAD_COLOUR);
   }
  }
  if(data.length)roadChunks.push({...batch(),x:tx+32,z:tz+32,r:46});
@@ -1340,7 +1361,8 @@ function emptyChair(x,z){
  }
  addBox(x,z,.42,.39,'chair');
 }
-const scenes=journeyScenes.map(scene=>{if(!GRID_MODE)return scene;const c=claimCell(scene.x,scene.z,true)||[scene.x,scene.z];return {...scene,x:c[0],z:c[1]};});
+// A quiet scene, like an islander, keeps a free cell beside it to stand on and look from.
+const scenes=journeyScenes.map(scene=>{if(!GRID_MODE)return scene;const c=claimCell(scene.x,scene.z,true,(i,j)=>approachCell(i,j)!==null);if(!c)return scene;const key=approachCell(...cellIndex(...c));if(key&&!roadCells.has(key))approachKept.add(key);return {...scene,x:c[0],z:c[1]};});
 for(const scene of scenes){
  const {x,z,kind}=scene,y=height(x,z);
  if(kind==='boat'){
@@ -1426,10 +1448,10 @@ sceneryBatch(3,14,16);
  {const by=height(gx,zB),half=C*.3;box(gx,by-.1,zB,half*2,.6,half*2,pal.stone);quad([gx-half+.2,by+.52,zB-half+.2],[gx+half-.2,by+.52,zB-half+.2],[gx+half-.2,by+.52,zB+half-.2],[gx-half+.2,by+.52,zB+half-.2],hex('acd0d2'));cone(gx,by+.5,zB,.18,.1,1.1,pal.cream,7);sphere(gx,by+1.6,zB,.32,.2,.32,pal.cream,8,4);addCircle(gx,zB,half,'greenhouse-basin');}
  // Hanging pots along the aisle.
  for(let x=x0+2.2;x<x1;x+=2.25){branch([x,y+wall,zA],[x,y+wall-.9,zA],.012,pal.bark);sphere(x,y+wall-1.05,zA,.24,.2,.24,pal.olive,7,4);}
- sceneryBatch(gx,zm,12);
+ sceneryBatch(gx,zm,Math.hypot(1.5*C,C)+1.5);
  // Gravel aisle along the open row (a ground decal).
  for(let x=x0;x<x1;x+=1.5)quad([x,height(x,zA-1.3)+.03,zA-1.3],[x,height(x,zA+1.3)+.03,zA+1.3],[x+1.5,height(x+1.5,zA+1.3)+.03,zA+1.3],[x+1.5,height(x+1.5,zA-1.3)+.03,zA-1.3],hex((x*2|0)%2?'ddd5c3':'d6cfbe'));
- sceneryBatch(gx,zA,11,true);
+ sceneryBatch(gx,zA,1.5*C+2,true);
 }
 // 3. The sky hamlet: small houses, a laundry line, a little glass pyramid, an outdoor table and islands afloat.
 {
@@ -1475,9 +1497,13 @@ sceneryBatch(3,14,16);
 }
 // 6. The singing gate: two stacked rock pillars and an arch over the north road, with wind-cut spires around.
 {
- const [x,z]=WINDGATE,y=height(x,z);
- for(const s of [-1,1]){const lx=x+s*3.2,ly=height(lx,z);for(let k=0;k<4;k++)sphere(lx+s*.08*k,ly+.9+k*1.3,z+(k%2?.18:-.18),1.25-k*.07,.9,1.1,hex(k%2?'9aa39c':'aeb3a6'),8,4);addCircle(lx,z,1.1,'windgate');}
- for(let k=0;k<=8;k++){const a=Math.PI*k/8;sphere(x-Math.cos(a)*3.2,y+5.5+Math.sin(a)*1.7,z,.95,.72,1,hex(k%2?'a4aca3':'b6b9ab'),7,4);}
+ // The gate straddles the road: on the grid, the road cell nearest the old north road, and turned across the road's run.
+ let x=-10,z=-28.5,acrossX=true;
+ if(GRID_MODE){let best=null;for(const key of roadCells){const [i,j]=key.split(',').map(Number),[cx,cz]=cellCentre(i,j),d=Math.hypot(cx-x,cz-z);if(!best||d<best.d)best={i,j,cx,cz,d};}
+  x=best.cx;z=best.cz;acrossX=roadCells.has(best.i+','+(best.j-1))||roadCells.has(best.i+','+(best.j+1));}
+ const y=height(x,z),across=(d)=>acrossX?[x+d,z]:[x,z+d],leg=CELL*.43;
+ for(const s of [-1,1]){const [lx,lz]=across(s*leg),ly=height(lx,lz);for(let k=0;k<4;k++)sphere(lx+(acrossX?s*.08*k:(k%2?.18:-.18)),ly+.9+k*1.3,lz+(acrossX?(k%2?.18:-.18):s*.08*k),1.25-k*.07,.9,1.1,hex(k%2?'9aa39c':'aeb3a6'),8,4);addCircle(lx,lz,1.1,'windgate');}
+ for(let k=0;k<=8;k++){const a=Math.PI*k/8,[ax,az]=across(-Math.cos(a)*leg);sphere(ax,y+5.5+Math.sin(a)*1.7,az,.95,.72,1,hex(k%2?'a4aca3':'b6b9ab'),7,4);}
  for(const [dx,dz,h] of [[-6,-4,4.2],[6.5,2,5],[-5.5,5,3.2],[5.5,-5,3.6]]){const p=spot(x+dx,z+dz);if(!p||routeDistance(p[0],p[1])<2)continue;cone(p[0],height(p[0],p[1]),p[1],.85,.12,h,hex('a2aaa2'),6);addCircle(p[0],p[1],.7,'wind-spire');}
  sceneryBatch(x,z,14);
 }
@@ -1526,6 +1552,37 @@ sceneryBatch(3,14,16);
  sceneryBatch(-31,22,24);
 }
 
+// Low wooden fences run along stretches of the grid roads, so a road reads as a path to follow. They stand on the cell
+// boundary beside the road and really block that side; regular gaps, junctions, plazas near named places, set pieces,
+// islanders and their approach cells stay open, so every place can still be reached (grid-check walks it all).
+if(GRID_MODE){
+ const buckets=new Map(),blockedSides=new Set(),C=CELL;
+ const nearPlace=(x,z)=>landmarks.some(([,,lx,lz,r])=>Math.hypot(x-lx,z-lz)<Math.max(r,C*1.6))||scenes.some(sc=>Math.hypot(x-sc.x,z-sc.z)<C*1.5)||npcs.some(n=>Math.hypot(x-n.x,z-n.z)<C*1.5)||reserved(x,z);
+ for(const key of roadCells){
+  const [i,j]=key.split(',').map(Number),[cx,cz]=cellCentre(i,j);
+  const roadNeighbours=QUARTERS.filter(([di,dj])=>roadCells.has((i+di)+','+(j+dj))).length;
+  if(roadNeighbours!==2||nearPlace(cx,cz))continue;
+  for(const [di,dj] of QUARTERS){
+   const nkey=(i+di)+','+(j+dj),[nx,nz]=cellCentre(i+di,j+dj);
+   if(roadCells.has(nkey)||approachKept.has(nkey)||!walkable(nx,nz)||nearPlace(nx,nz))continue;
+   // About three sides in five are fenced, decided by a fixed pattern so the gaps stay where they are.
+   const hash=((i*73856093)^(j*19349663)^((di+2)*83492791)^((dj+2)*2654435761))>>>0;
+   if(hash%5>=3)continue;
+   const bx=cx+di*C/2,bz=cz+dj*C/2,ax=dj!==0,side=key+'>'+nkey;blockedSides.add(side);
+   const tileKey=Math.floor(bx/64)+','+Math.floor(bz/64);let list=buckets.get(tileKey);if(!list)buckets.set(tileKey,list=[]);list.push([bx,bz,ax]);
+   addBox(bx,bz,ax?C/2:.06,ax?.06:C/2,'fence');
+  }
+ }
+ for(const [tileKey,list] of buckets){
+  const [tx2,tz2]=tileKey.split(',').map(Number);
+  for(const [bx,bz,alongX] of list){
+   const ends=alongX?[[bx-C/2,bz],[bx+C/2,bz]]:[[bx,bz-C/2],[bx,bz+C/2]];
+   for(let k=0;k<=4;k++){const t=k/4,px=ends[0][0]+(ends[1][0]-ends[0][0])*t,pz=ends[0][1]+(ends[1][1]-ends[0][1])*t,py=height(px,pz);box(px,py-.05,pz,.14,1.05,.14,hex('9a8f78'));}
+   for(const h of [.45,.85]){const [a,b]=ends;branch([a[0],height(a[0],a[1])+h,a[1]],[b[0],height(b[0],b[1])+h,b[1]],.035,hex('b3a78c'));}
+  }
+  sceneryBatch(tx2*64+32,tz2*64+32,48);
+ }
+}
 // Small patches break up long uniform verges without filling every empty view.
 // Their spacing follows the route; the road surface and sightlines stay clear.
 let vergeIndex=0;
@@ -1641,11 +1698,12 @@ let lookYaw=0,activeCommand=null,bumpedCommand=null,bumpedAt=null;
 function gridUpdate(dt){
  // A still press arms the held mode: a soft click (and a tap of vibration where supported) says so.
  if(gridGesture.arm(performance.now()/1000))holdClick();
- // Looking around: the view follows the finger up to LOOK_DEGREES; pulling further clicks and turns a quarter,
- // starting from where the view already is. Letting go (or leaving the look) eases the view back to the heading.
- const look=gridGesture.look,lookLimit=LOOK_DEGREES*Math.PI/180;
- if(Math.abs(look)>=LOOK_TURN&&!walker.action&&walker.cooldown<=0&&walker.command(look>0?'turnRight':'turnLeft',{look:lookYaw})==='turn'){lookYaw=0;gridGesture.rebaseLook();holdClick();}
- else lookYaw+=(-Math.max(-1,Math.min(1,look))*lookLimit-lookYaw)*(1-Math.exp(-dt*12));
+ // Looking around: the view follows the finger continuously, like an ordinary 3D game. Whenever it points closer to a
+ // neighbouring direction (past 45 degrees, with a little hysteresis), that becomes the heading with a soft tick, and the
+ // view stays exactly where it is. Letting go settles the view gently on the heading.
+ const looking=gridGesture.look!==0||gridGesture.command==='look';
+ lookYaw+=(-gridGesture.look*Math.PI/2-lookYaw)*(1-Math.exp(-dt*(looking?20:6)));
+ if(Math.abs(lookYaw)>Math.PI/4+.04){const q=lookYaw<0?1:-1;if(walker.reaim(q)){lookYaw+=q*Math.PI/2;gridGesture.shiftLook(q);holdClick();}}
  const held=heldCommand();
  // Letting go (or changing direction) mid-step slows to a stop on the cell being entered.
  if(held!==activeCommand)walker.easeOut();
@@ -1661,9 +1719,10 @@ function gridUpdate(dt){
    // One-shot touch commands (a step back, an about-face) act once per slide and always ease to a stop.
    // A held press then slide walks carefully: one eased cell at a time with a short rest, never a glide.
    // Flicked side-steps and steps back are single eased cells; the held-press walk forward strolls without stopping.
-   const fromGesture=!fresh&&gridGesture.held&&command===gridGesture.command;
-   const slow=fromGesture&&(command==='strafeLeft'||command==='strafeRight'||command==='back'),stroll=fromGesture&&gridGesture.careful&&command==='forward';
-   const result=walker.command(command,{quick:keys.has('ShiftLeft')||keys.has('ShiftRight'),slow,stroll,hold:command===held&&!slow&&!(fromGesture&&ONE_SHOT.has(command))});
+   // Touch: side-steps glide on while held, a step back is one eased cell, the held-press walk strolls without stopping.
+   const fromGesture=!fresh&&gridGesture.held&&command===gridGesture.available();
+   const side=fromGesture&&(command==='strafeLeft'||command==='strafeRight'),slow=fromGesture&&command==='back',stroll=fromGesture&&gridGesture.careful&&command==='forward';
+   const result=walker.command(command,{quick:keys.has('ShiftLeft')||keys.has('ShiftRight'),slow,side,stroll,hold:command===held&&!slow&&!(fromGesture&&ONE_SHOT.has(command))});
    if(result&&!fresh&&gridGesture.held)gridGesture.take(command);
    if(result==='step'){const [x,z]=walker.center(walker.i,walker.j);footstep(surfaceAt(x,z),CELL/STEP_SECONDS);}
    if(result==='blocked'){bumpedCommand=command;bumpedAt=where;}else if(result){bumpedCommand=null;}
@@ -1919,10 +1978,10 @@ function drawAutomap(){
 }
 if(GRID_MODE){
  document.body.classList.add('grid-mode');
- canvas.setAttribute('aria-label',canvas.getAttribute('aria-label').split('。')[0]+'。マス目を一つずつ歩きます。W/Sで一マス前後、A/Dで横へ一マス、Q/Eまたは左右矢印で90度向きを変え、Xで振り返ります。画面下半分では、はじくと体ごと動き（上は前進、左右はカニ歩き、下は一歩後ろ）、少し押して音がしてから滑らせると顔を向けます（左右で見渡し、さらに引くと旋回、下で振り返り、上でゆったり前進）。軽く触れると一マス進みます。');
- const notes=document.querySelector('.notes p');if(notes)notes.innerHTML='マス目をひとつずつ歩く。下半分ではじくと「体ごと動く」：上で前進、左右でカニ歩き、下で1歩後ろへ。<br>少し押して「カチッ」としたら滑らせると「顔を向ける」：左右で見渡し、さらに引くと90度旋回。下で振り返り、上でゆったり歩く。<br>軽く触れると一マス。PCは W A S D · Q E · ← → · X。';
+ canvas.setAttribute('aria-label',canvas.getAttribute('aria-label').split('。')[0]+'。マス目を一つずつ歩きます。W/Sで一マス前後、A/Dで横へ一マス、Q/Eまたは左右矢印で90度向きを変え、Xで振り返ります。画面下半分では、はじくと体ごと動き（上は前進、左右はカニ歩き、下は一歩後ろ）、少し押して音がしてから左右へ滑らせると見渡します。45度を越えるとその方向が正面になり、見渡しながら指を上へずらすとその方向へ歩きます。軽く触れると一マス進みます。');
+ const notes=document.querySelector('.notes p');if(notes)notes.innerHTML='マス目をひとつずつ歩く。下半分ではじくと「体ごと動く」：上で前進、左右でカニ歩き、下で1歩後ろへ（押したままで続ける）。<br>少し押して「カチッ」としたら左右へ滑らせると「見渡す」：視線が指についてきて、45度を越えるとそちらが正面に。見渡しながら指を上へずらすとそのまま歩く。<br>軽く触れると一マス。PCは W A S D · Q E · ← → · X。';
  const book=document.querySelector('.book-controls');
- if(book)book.innerHTML='<h3>マス目を歩く</h3><p><b>はじく＝体ごと動く</b><br>上：前へ歩く（保持で歩き続ける）／左右：カニ歩き（保持で1マスずつ）／下：1歩後ろへ<br><b>少し押して「カチッ」→ 滑らせる＝顔を向ける</b><br>左右：指に合わせて景色を見渡す（45度まで）。さらに引くと「カチッ」と90度旋回<br>下：振り返る／上：止まらずゆったり前へ歩く<br>離すと視線は正面に戻ります。軽く触れると一マス進みます。</p><p class="keyboard-notes">PC：W / S で前後 ／ A / D で横へ一マス ／ Q E ・ ← → で向き替え ／ X で振り返る<br>Shift で早足 ／ M で地図 ／ H でしおり ／ Esc で入力解除</p>';
+ if(book)book.innerHTML='<h3>マス目を歩く</h3><p><b>はじく＝体ごと動く</b><br>上：前へ歩く／左右：カニ歩き／下：1歩後ろへ（上と左右は押したままで続く）<br><b>少し押して「カチッ」→ 左右へ滑らせる＝見渡す</b><br>視線が指についてきます。45度を越えると「カチッ」とそちらが正面になります。<br>見渡しながら指を上へずらすと、見ている方へそのまま歩きます。<br>離すと視線は正面に落ち着きます。軽く触れると一マス進みます。</p><p class="keyboard-notes">PC：W / S で前後 ／ A / D で横へ一マス ／ Q E ・ ← → で向き替え ／ X で振り返る<br>Shift で早足 ／ M で地図 ／ H でしおり ／ Esc で入力解除</p>';
 }
 function begin(){if(started||contextLost)return;started=true;notices.clear();document.body.classList.add('playing');canvas.focus();audio();}
 const beginButton=document.querySelector('#begin');beginButton.addEventListener('click',begin);beginButton.disabled=false;beginButton.removeAttribute('aria-busy');
