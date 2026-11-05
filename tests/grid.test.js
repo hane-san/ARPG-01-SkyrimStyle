@@ -107,7 +107,7 @@ test('a held walk glides between cells at constant speed and eases out on releas
  assert.equal(back,false);assert.equal(r.z,-CELL);
 });
 
-test('a flick turns or steps once; a held sideways slide only looks, within a limit, and never turns',()=>{
+test('a flick turns or steps once; a held sideways slide only glances, easing into 45 degrees, and never turns',()=>{
  const g=new GridGesture(),b={top:0,height:800},touch=(id,x,y)=>({pointerId:id,pointerType:'touch',clientX:x,clientY:y,button:0,buttons:1,isPrimary:true});
  assert.ok(ONE_SHOT.has('turnLeft')&&ONE_SHOT.has('turnRight')&&ONE_SHOT.has('back')&&!ONE_SHOT.has('forward'));
  // Flicks: sideways turns a quarter, once per slide however long the finger stays down.
@@ -119,15 +119,19 @@ test('a flick turns or steps once; a held sideways slide only looks, within a li
  g.begin(touch(21,200,600),b,0);g.move(touch(21,200,540),.06);assert.equal(g.available(),'forward');g.take('forward');assert.equal(g.available(),'forward');g.end(touch(21,200,540),1);
  // Held then down is a step back too: nothing spins you round by accident.
  g.begin(touch(3,200,600),b,0);g.move(touch(3,200,660),.5);assert.equal(g.available(),'back');g.end(touch(3,200,660),.6);
- // Held press arms once; a sideways slide then only looks, from where the look began, up to the limit either way.
+ // Held press arms once; a sideways slide then only looks, from where the look began: one to one at first, then easing
+ // softly into 45 degrees either way (a natural glance), never reaching the next direction.
+ assert.equal(LOOK_LIMIT_QUARTERS,.5);
  g.begin(touch(4,200,600),b,0);assert.equal(g.arm(HOLD_SECONDS-.01),false);assert.equal(g.arm(HOLD_SECONDS+.01),true);
  g.move(touch(4,230,602),HOLD_SECONDS+.1);assert.equal(g.command,'look');assert.equal(g.available(),null);assert.equal(g.look,0);
- g.move(touch(4,230+LOOK_PIXELS_PER_QUARTER/2,602),.4);assert.ok(Math.abs(g.look-.5)<1e-9);
- g.move(touch(4,230+LOOK_PIXELS_PER_QUARTER*3,602),.5);assert.equal(g.look,LOOK_LIMIT_QUARTERS);assert.equal(g.available(),null,'looking never turns');
+ g.move(touch(4,230+LOOK_PIXELS_PER_QUARTER/10,602),.35);assert.ok(Math.abs(g.look-.1)<.002,g.look);
+ g.move(touch(4,230+LOOK_PIXELS_PER_QUARTER/2,602),.4);assert.ok(g.look>.35&&g.look<.4,g.look);
+ let previous=0;for(let px=0;px<=2000;px+=25){g.move(touch(4,230+px,602),.45);assert.ok(g.look>=previous&&g.look<=LOOK_LIMIT_QUARTERS);previous=g.look;}
+ assert.ok(previous>LOOK_LIMIT_QUARTERS*.99);assert.equal(g.available(),null,'looking never turns');
  // Swinging back through the origin keeps looking (now to the left); sliding up while looking does not walk.
  g.move(touch(4,150,602),.6);assert.equal(g.command,'look');assert.ok(g.look<0);
  g.move(touch(4,150,540),.7);assert.equal(g.command,'look');assert.equal(g.available(),null);
- g.move(touch(4,-900,540),.75);assert.equal(g.look,-LOOK_LIMIT_QUARTERS);
+ g.move(touch(4,-900,540),.75);assert.ok(g.look>-LOOK_LIMIT_QUARTERS&&g.look<-LOOK_LIMIT_QUARTERS*.99);
  // A look is not a lost command on release.
  assert.equal(g.end(touch(4,-900,540),.8),true);assert.equal(g.look,0);
  // Walking forward and then sliding sideways looks: a glance aside while walking on.

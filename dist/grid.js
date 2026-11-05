@@ -178,11 +178,11 @@ export function keyCommand(code){return KEY_COMMANDS[code]||null;}
 //   Each flick is one deliberate cell or one turn; keeping the finger down after a flick up walks on, one eased cell
 //   at a time. A flick that lands while a step is still playing is kept and acted on next.
 // - A held press (the game clicks when it arms) and then a sideways slide only moves the eyes: the view follows the
-//   finger (LOOK_PIXELS_PER_QUARTER per 90 degrees, at most LOOK_LIMIT_QUARTERS either way) and settles back on the
-//   heading when the finger lifts. The heading never changes by looking. Held then up / down steps like a flick.
+//   finger (LOOK_PIXELS_PER_QUARTER per 90 degrees at first, easing into 45 degrees either way: a natural glance) and
+//   settles back on the heading when the finger lifts. The heading never changes by looking. Held then up / down steps like a flick.
 // - Side-steps are not gestures: the page's two faint corner buttons do them.
 // A short still tap is one step forward.
-export const SWIPE_DISTANCE=22,TAP_DISTANCE=10,HOLD_SECONDS=.12,TAP_SECONDS=HOLD_SECONDS,LOOK_PIXELS_PER_QUARTER=150,LOOK_LIMIT_QUARTERS=4/3;
+export const SWIPE_DISTANCE=22,TAP_DISTANCE=10,HOLD_SECONDS=.12,TAP_SECONDS=HOLD_SECONDS,LOOK_PIXELS_PER_QUARTER=150,LOOK_LIMIT_QUARTERS=.5;
 const FLICK={up:'forward',down:'back',left:'turnLeft',right:'turnRight'},HELD={up:'forward',down:'back',left:'look',right:'look'};
 export function swipeDirection(dx,dy){
  if(Math.hypot(dx,dy)<SWIPE_DISTANCE)return null;
@@ -196,8 +196,10 @@ export class GridGesture {
  // The command to act on now: a one-shot (a turn, the step back) is offered once per slide. Looking is not a command.
  available(){if(this.command==='look')return null;return this.command&&!(ONE_SHOT.has(this.command)&&this.taken===this.command)?this.command:null;}
  take(command){this.acted=true;if(ONE_SHOT.has(command))this.taken=command;}
- // How far the eyes have turned, in quarters (positive = right), within LOOK_LIMIT_QUARTERS either way.
- get look(){if(!this.held||this.command!=='look')return 0;const q=(this.x-this.lookOrigin)/LOOK_PIXELS_PER_QUARTER;return Math.max(-LOOK_LIMIT_QUARTERS,Math.min(LOOK_LIMIT_QUARTERS,q));}
+ // How far the eyes have turned, in quarters (positive = right), always inside LOOK_LIMIT_QUARTERS either way.
+ // A glance, not a turn (D017): it follows the finger one to one at first and then leans softly into the limit, like a
+ // head turning as far as is comfortable, so it never reaches the next direction. Only a flick turns.
+ get look(){if(!this.held||this.command!=='look')return 0;const q=(this.x-this.lookOrigin)/LOOK_PIXELS_PER_QUARTER;return LOOK_LIMIT_QUARTERS*Math.tanh(q/LOOK_LIMIT_QUARTERS);}
  reset(){const id=this.clearOwner();this.contacts.clear();this.blocked=false;return id;}
  begin(e,bounds,now){
   if(e.button>0)return false;
