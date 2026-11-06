@@ -1,3 +1,4 @@
+const {watariRoutes,WATARI_PLACES,watariLandHeight,onWatariBridge,watariDeckHeight,configureWatariBridge}=await import('./watari.js'+new URL(import.meta.url).search);
 export const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
 export const smooth=(a,b,x)=>{const t=clamp((x-a)/(b-a),0,1);return t*t*(3-2*t)};
 // A continuous loop connects the old shrine to four different northern landscapes.
@@ -29,7 +30,7 @@ landmarks.push(['潮を渡る石道','THE SEA CAUSEWAY',430,-480,26],['水鏡の
 landmarks.push(['風環の丘','THE WIND RING',-105,-245,25],['凪見の港町','NAGIMI HARBOUR',-310,-335,30],['重ね石の渓谷','THE LAYERED GORGE',0,-390,25],['ひかりの棚田','THE TERRACED FIELDS',-225,-510,28],['空洞のピラミッド','THE OPEN PYRAMID',-120,-580,28],['岬の天球','THE CELESTIAL SPHERE',0,-840,28],['白い石切り場','THE WHITE QUARRY',315,-525,28],['ねじれの庭','THE SPIRAL GARDEN',175,-305,25]);
 export const monuments=[{kind:'ring',x:-105,z:-245,size:22},{kind:'pyramid',x:-120,z:-580,size:28},{kind:'sphere',x:0,z:-840,size:14},{kind:'cube',x:338,z:-535,size:22},{kind:'spiral',x:175,z:-305,size:20}];
 const causewayPaths=[easternRoute.slice(0,4)],returnPaths=[easternRoute.slice(15),saltRoute];
-function rawHeight(x,z){
+function legacyRawHeight(x,z){
  const old=z<-128?-3:originalHeight(x,z);
  if(z>-112)return old;
  const lobe=(cx,cz,rx,rz,level,rise)=>{const r=Math.hypot((x-cx)/rx,(z-cz)/rz),edge=1-r+.025*Math.sin(x*.026+z*.019);return Math.min(level,edge*25)+smooth(0,.36,edge)*rise*Math.exp(-r*r*2.2);};
@@ -50,11 +51,14 @@ function rawHeight(x,z){
  east=Math.max(east,3.2-distanceToRoute(x,z,returnPaths)*.2);
  return Math.max(old,land,east,-3);
 }
+// The new island occupies previously empty sea; the old height formula stays intact.
+routes.push(...watariRoutes);landmarks.push(...WATARI_PLACES);
+function rawHeight(x,z){return Math.max(legacyRawHeight(x,z),watariLandHeight(x,z));}
 // Grid travel (D020) reshapes only the detailed first area: a little more relief and a few new landforms near the
 // landing (dunes, a lookout knoll, a small pond), then every cell becomes a level step joined to its neighbours by
 // a soft ramp, so the ground matches the one-cell walk. Free walking (?grid=0) keeps the original island exactly.
 let gridTerrainSpec=null;const TERRACE=.9;
-export function useGridTerrain(origin,cell){gridTerrainSpec={ox:origin[0],oz:origin[1],cell};coarseHeights.fill(NaN);fineHeights.fill(NaN);}
+export function useGridTerrain(origin,cell){gridTerrainSpec={ox:origin[0],oz:origin[1],cell};coarseHeights.fill(NaN);fineHeights.fill(NaN);configureWatariBridge(terrainHeight);}
 export const START_LANDFORMS=Object.freeze({
  dunes:[[17,22,6,4,1.5],[-5,21,5,3.5,1.2],[2,26,3.5,3,.7]],
  knoll:[27,-2,8,7,2.4],
@@ -85,28 +89,30 @@ function gridShaped(x,z){
  return raw+(shaped-raw)*fade;
 }
 // The collision surface uses the same triangles as the mesh. Camera height never chases a different floor.
-export function terrainStep(x,z){return x>=-64&&x<=64&&z>=-128&&z<=64?2:8;}
+export function terrainStep(x,z){return x>=-64&&x<=320&&z>=-128&&z<=64?2:8;}
 // Static grid vertices are shared by drawing, collision and camera height. About 0.3 MB, no per-frame map churn.
 const coarseColumns=(WORLD_BOUNDS.maxX-WORLD_BOUNDS.minX)/8+2,coarseRows=(WORLD_BOUNDS.maxZ-WORLD_BOUNDS.minZ)/8+2;
-const coarseHeights=new Float64Array(coarseColumns*coarseRows).fill(NaN),fineHeights=new Float64Array(65*97).fill(NaN);
+const coarseHeights=new Float64Array(coarseColumns*coarseRows).fill(NaN),fineHeights=new Float64Array(193*97).fill(NaN);
 function sampledHeight(x,z){
  let cache,index;
  if(x%8===0&&z%8===0){const ix=(x-WORLD_BOUNDS.minX)/8,iz=(z-WORLD_BOUNDS.minZ)/8;if(ix>=0&&ix<coarseColumns&&iz>=0&&iz<coarseRows){cache=coarseHeights;index=iz*coarseColumns+ix;}}
- else if(x>=-64&&x<=64&&z>=-128&&z<=64){cache=fineHeights;index=((z+128)/2)*65+(x+64)/2;}
- if(!cache)return rawHeight(x,z);
+ else if(x>=-64&&x<=320&&z>=-128&&z<=64){cache=fineHeights;index=((z+128)/2)*193+(x+64)/2;}
+ if(!cache)return gridShaped(x,z);
  let h=cache[index];if(Number.isNaN(h)){h=gridShaped(x,z);cache[index]=h;}return h;
 }
 function vertexHeight(x,z){
- if(z===-128&&x>=-64&&x<=64){const a=Math.floor(x/8)*8,t=(x-a)/8;return sampledHeight(a,z)*(1-t)+sampledHeight(a+8,z)*t;}
- if((x===-64||x===64)&&z>=-128&&z<=64){const a=Math.floor(z/8)*8,t=(z-a)/8;return sampledHeight(x,a)*(1-t)+sampledHeight(x,a+8)*t;}
+ if(z===-128&&x>=-64&&x<=320){const a=Math.floor(x/8)*8,t=(x-a)/8;return sampledHeight(a,z)*(1-t)+sampledHeight(a+8,z)*t;}
+ if((x===-64||x===64||x===320)&&z>=-128&&z<=64){const a=Math.floor(z/8)*8,t=(z-a)/8;return sampledHeight(x,a)*(1-t)+sampledHeight(x,a+8)*t;}
  return sampledHeight(x,z);
 }
-export function height(x,z){
+export function terrainHeight(x,z){
  const step=terrainStep(x,z),ax=Math.floor(x/step)*step,az=Math.floor(z/step)*step,u=(x-ax)/step,v=(z-az)/step;
  const a=vertexHeight(ax,az),b=vertexHeight(ax+step,az),c=vertexHeight(ax,az+step);
  if(u+v<=1)return a+(b-a)*u+(c-a)*v;
  const d=vertexHeight(ax+step,az+step);return d+(c-d)*(1-u)+(b-d)*(1-v);
 }
+configureWatariBridge(terrainHeight);
+export function height(x,z){return onWatariBridge(x,z)?watariDeckHeight(x,z):terrainHeight(x,z);}
 export const MOON_DIRECTION=(()=>{const v=[-.3,.31,-.9],n=Math.hypot(...v);return v.map(x=>x/n)})();
 export function skyRay(u,v,yaw,aspect,fov=68){const t=Math.tan(fov*Math.PI/360),x=(u*2-1)*aspect*t,y=(v*2-1)*t,z=-1,c=Math.cos(yaw),s=Math.sin(yaw),ray=[c*x+s*z,y,-s*x+c*z],n=Math.hypot(...ray);return ray.map(a=>a/n);}
 export function walkable(x,z){return height(x,z)>.12;}

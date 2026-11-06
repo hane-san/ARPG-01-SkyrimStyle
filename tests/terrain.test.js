@@ -34,7 +34,7 @@ test('every section of the loop and its cove spur has a dry walking corridor',()
 test('all old and new destinations connect to the starting beach, including the sandbar',()=>{
  const key=(x,z)=>`${x},${z}`,seen=new Set(['8,30']),queue=[[8,30]];
  for(let i=0;i<queue.length;i++){const [x,z]=queue[i];for(const [dx,dz] of [[1,0],[-1,0],[0,1],[0,-1]]){const a=x+dx,b=z+dz,k=key(a,b);if(!seen.has(k)&&walkable(a,b)){seen.add(k);queue.push([a,b]);}}}
- for(const [name,,x,z] of landmarks)assert.ok(seen.has(key(x,z)),name);
+ for(const [name,,x,z] of landmarks)assert.ok(seen.has(key(Math.round(x),Math.round(z))),name);
  assert.ok(seen.size>9500,'the expanded island has substantial explorable land');
  assert.equal(walkable(47,-44),false,'cove is connected to the sea');
  assert.equal(walkable(0,-960),false,'new southern headland ends at the sea');

@@ -45,6 +45,14 @@ jobs:
       - run: python tests/sky-check.py
       - run: python tests/journey-check.py
       - run: python tests/grid-check.py
+      - run: python tests/watari-check.py
+      - name: Keep Watari portrait evidence
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: watari-portrait-evidence
+          path: 'watari*.png'
+          retention-days: 7
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
