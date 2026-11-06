@@ -162,14 +162,12 @@ with sync_playwright() as pw:
  touch('touchStart',195,700);touch('touchMove',195,640);mobile.wait_for_function('nagi.grid.steps+nagi.grid.bumps>=2',timeout=15000);mobile.wait_for_timeout(800);touch('touchEnd');settle(mobile)
  done=actions();mobile.wait_for_timeout(600);assert actions()==done
  grid=lambda key:mobile.evaluate('nagi.grid.'+key)
- # D018: while the finger stays down, a sideways slide only glances; nothing turns until it lifts.
+ # D019: a quick sideways flick turns a quarter at once, while the finger is still down, and only once; no step.
  heading,turns,before=grid('heading'),grid('turns'),actions()
- t=time.time();touch('touchStart',195,700,t);touch('touchMove',260,705,t+.08)
- mobile.wait_for_function('nagi.grid.look<-.2',timeout=15000);mobile.wait_for_timeout(600)
- assert grid('turns')==turns and grid('heading')==heading,mobile.evaluate('nagi.grid')
- # Lifting it quickly (the whole touch a flick) turns a quarter that way, once, with no step.
- touch('touchEnd',at=t+.16);mobile.wait_for_function(f'nagi.grid.turns>{turns}',timeout=15000);settle(mobile)
- assert grid('heading')==(heading+1)%4 and grid('turns')==turns+1 and actions()==before and abs(grid('look'))<.01,mobile.evaluate('nagi.grid')
+ t=time.time();touch('touchStart',195,700,t);touch('touchMove',260,705,t+.08);mobile.wait_for_function(f'nagi.grid.turns>{turns}',timeout=15000)
+ mobile.wait_for_timeout(1200);assert grid('turns')==turns+1 and abs(grid('look'))<.01,mobile.evaluate('nagi.grid')
+ touch('touchEnd');settle(mobile)
+ assert grid('heading')==(heading+1)%4 and grid('turns')==turns+1 and actions()==before,mobile.evaluate('nagi.grid')
  t=time.time();touch('touchStart',195,700,t);touch('touchMove',130,705,t+.08);touch('touchEnd',at=t+.12)
  mobile.wait_for_function(f'nagi.grid.turns>{turns+1}',timeout=15000);settle(mobile)
  assert grid('heading')==heading and actions()==before

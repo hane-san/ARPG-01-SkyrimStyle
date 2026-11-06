@@ -10,8 +10,9 @@ export const HEADINGS=Object.freeze([[0,-1],[1,0],[0,1],[-1,0]]);
 export const HEADING_NAMES=Object.freeze(['北','東','南','西']);
 export const headingYaw=h=>-((h%4+4)%4)*Math.PI/2;
 export function nearestHeading(yaw){return ((Math.round(-yaw/(Math.PI/2))%4)+4)%4;}
-// Smootherstep: zero velocity and acceleration at both ends, so a quarter turn starts and settles softly.
-const turnEase=t=>t*t*t*(t*(6*t-15)+10);
+// A turn answers at once (D019): it leaves with a gentle, already-moving start (1.2 times the average pace, so there is
+// no wind-up before the view moves) and settles softly with zero velocity, never overshooting.
+const TURN_START_SLOPE=1.2,turnEase=t=>hermite(t,TURN_START_SLOPE,0);
 // Cubic Hermite from 0 to 1 with start/end slopes m0/m1 (in units of the whole move per duration).
 export function hermite(w,m0,m1){const w2=w*w,w3=w2*w;return (w3-2*w2+w)*m0+(-2*w3+3*w2)+(w3-w2)*m1;}
 export function hermiteSlope(w,m0,m1){return (3*w*w-4*w+1)*m0+(6*w-6*w*w)+(3*w*w-2*w)*m1;}
@@ -178,19 +179,18 @@ export function gridRoute(points,origin=GRID_ORIGIN,cell=CELL,walkable=null){
 const KEY_COMMANDS={KeyX:'turnAround',KeyW:'forward',ArrowUp:'forward',KeyS:'back',ArrowDown:'back',KeyA:'strafeLeft',KeyD:'strafeRight',KeyQ:'turnLeft',ArrowLeft:'turnLeft',KeyE:'turnRight',ArrowRight:'turnRight'};
 export function keyCommand(code){return KEY_COMMANDS[code]||null;}
 
-// Touch: one finger in the lower half (D016, D018). While the finger is down, sideways only ever looks; turning is
-// decided when it lifts.
-// - Up flicks a step forward (held on, it walks on one eased cell at a time); down steps back once.
-// - Sideways, the view follows the finger (LOOK_PIXELS_PER_QUARTER per 90 degrees at first, easing into 45 degrees
-//   either way: a natural glance). Lifting the finger settles the view back on the heading, unless the whole touch
-//   was a quick flick (released within FLICK_SECONDS, not begun after a still press): then it turns a quarter that way,
-//   starting from where the glance already is.
-// - A still press of HOLD_SECONDS arms (a soft click): from then on the touch never turns, only looks or walks.
+// Touch: one finger in the lower half (D016, D019). A flick acts at once; a press-in then slide only looks.
+// - A quick flick (a slide that starts within HOLD_SECONDS): up steps forward (held on, it walks on one eased cell at a
+//   time), down steps back once, left/right turn a quarter that way as soon as the slide is seen, smoothly, one per
+//   flick. Nothing waits for the finger to lift.
+// - A press-in (a still press of HOLD_SECONDS, which clicks) and then a sideways slide only moves the eyes: the view
+//   follows the finger (LOOK_PIXELS_PER_QUARTER per 90 degrees at first, easing into 45 degrees either way: a natural
+//   glance) and settles back on the heading when the finger lifts. Looking never turns. Held then up / down steps.
+// - Walking forward and then sliding sideways in the same touch looks too.
 // - Side-steps are not gestures: the page's two faint corner buttons do them.
 // A flick that lands while a step is still playing is kept and acted on next. A short still tap is one step forward.
-export const SWIPE_DISTANCE=22,TAP_DISTANCE=10,HOLD_SECONDS=.12,TAP_SECONDS=HOLD_SECONDS,LOOK_PIXELS_PER_QUARTER=150,LOOK_LIMIT_QUARTERS=.5,FLICK_SECONDS=.3;
-const FLICK={up:'forward',down:'back',left:'look',right:'look'},HELD=FLICK;
-export const flickTurn=(dx,dy,seconds,armed=false)=>!armed&&seconds<=FLICK_SECONDS&&Math.abs(dx)>=SWIPE_DISTANCE&&Math.abs(dx)>Math.abs(dy)?(dx<0?'turnLeft':'turnRight'):null;
+export const SWIPE_DISTANCE=22,TAP_DISTANCE=10,HOLD_SECONDS=.12,TAP_SECONDS=HOLD_SECONDS,LOOK_PIXELS_PER_QUARTER=150,LOOK_LIMIT_QUARTERS=.5;
+const FLICK={up:'forward',down:'back',left:'turnLeft',right:'turnRight'},HELD={up:'forward',down:'back',left:'look',right:'look'};
 export function swipeDirection(dx,dy){
  if(Math.hypot(dx,dy)<SWIPE_DISTANCE)return null;
  return Math.abs(dy)>=Math.abs(dx)?(dy<0?'up':'down'):(dx<0?'left':'right');
@@ -232,26 +232,23 @@ export class GridGesture {
   // Each new slide direction decides once, on the events' own times: early is a flick, after HOLD_SECONDS it is held.
   if(direction!==this.segment){this.segment=direction;this.careful=!!direction&&now-this.started>=HOLD_SECONDS;}
   const sideways=direction==='left'||direction==='right';
-  // Any sideways slide looks. From a still start it is measured from the touch origin, after a walk from where the finger
-  // is then, so the view never jumps.
+  // A sideways slide after a press-in looks (a quick one turns, below). From a still start the look is measured from the
+  // touch origin, after a walk from where the finger is then, so the view never jumps.
   // Once looking, the look goes on (even back through the origin) until the finger lifts.
-  if(!this.looking&&sideways){this.looking=true;this.lookOrigin=this.command?e.clientX:this.origin.x;}
+  if(!this.looking&&this.careful&&sideways){this.looking=true;this.lookOrigin=this.command?e.clientX:this.origin.x;}
   this.x=e.clientX;
   const command=this.looking?'look':direction?(this.careful?HELD:FLICK)[direction]:null;
   if(command!==this.command){this.command=command;this.acted=false;}
   if(this.command!==this.taken)this.taken=null;
   return true;
  }
- // Returns 'tap' when the release was a short, still press; a command when a flick ended before it could act or a quick
- // sideways flick turns (the page queues it, so quick flicks are never lost); otherwise true/false for ownership.
+ // Returns 'tap' when the release was a short, still press; a command when a flick ended before it could act (the page
+ // queues it, so quick flicks are never lost); otherwise true/false for ownership.
  // Judged on the events' own times: a busy frame that delays the release never turns a quick tap into a press.
  end(e,now){
   this.contacts.delete(e.pointerId);if(!this.contacts.size)this.blocked=false;
   if(e.pointerId!==this.id)return false;
   // A quick sideways flick turns, decided only now that the finger has lifted.
-  // Judged on the events' own times, like a tap: a slide that began after a still press (careful) never turns.
-  const turn=this.command==='look'?flickTurn(e.clientX-this.origin.x,e.clientY-this.origin.y,now-this.started,this.careful):null;
-  if(turn){this.clearOwner();return turn;}
   const tap=!this.moved&&!this.command&&now-this.started<TAP_SECONDS,unacted=this.command&&this.command!=='look'&&!this.acted?this.command:null;
   this.clearOwner();return tap?'tap':unacted||true;
  }
