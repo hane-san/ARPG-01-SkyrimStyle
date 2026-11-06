@@ -110,7 +110,7 @@ with sync_playwright() as pw:
  position=page.evaluate('nagi.position');turns=page.evaluate('nagi.grid.turns');page.keyboard.press('e');page.wait_for_function(f'nagi.grid.turns>{turns}&&!nagi.grid.busy');assert page.evaluate('nagi.position.x')==position['x'] and page.evaluate('nagi.position.z')==position['z']
  # Each region has a distinctive actual track and environment, and the home sky returns after the bridge.
  skies=[];views=[]
- headings={'watariForest':3,'watariRed':1,'watariFlowers':.5,'watariCanal':2,'watariLibrary':1.5,'watariTemple':1,'watariCliff':.5}
+ headings={'watariForest':3,'watariRed':1,'watariFlowers':.5,'watariCanal':1.5,'watariLibrary':1.3,'watariTemple':1,'watariCliff':.5}
  for region in page.evaluate('_watariQA.regions'):
   page.evaluate('([x,z])=>_watariQA.go(x,z)',[region['x'],region['z']]);state=page.evaluate('_watariQA.environment()')
   assert state['region']==state['track']==region['id'],(region,state)
