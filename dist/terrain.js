@@ -50,6 +50,40 @@ function rawHeight(x,z){
  east=Math.max(east,3.2-distanceToRoute(x,z,returnPaths)*.2);
  return Math.max(old,land,east,-3);
 }
+// Grid travel (D020) reshapes only the detailed first area: a little more relief and a few new landforms near the
+// landing (dunes, a lookout knoll, a small pond), then every cell becomes a level step joined to its neighbours by
+// a soft ramp, so the ground matches the one-cell walk. Free walking (?grid=0) keeps the original island exactly.
+let gridTerrainSpec=null;const TERRACE=.9;
+export function useGridTerrain(origin,cell){gridTerrainSpec={ox:origin[0],oz:origin[1],cell};coarseHeights.fill(NaN);fineHeights.fill(NaN);}
+export const START_LANDFORMS=Object.freeze({
+ dunes:[[17,22,6,4,1.5],[-5,21,5,3.5,1.2],[2,26,3.5,3,.7]],
+ knoll:[27,-2,8,7,2.4],
+ pond:[-11,27,4.5,3.4]
+});
+function startBase(x,z){
+ const raw=rawHeight(x,z);if(raw<.3)return raw;
+ const land=smooth(.3,1.1,raw),bump=(cx,cz,rx,rz,h)=>h*Math.exp(-(((x-cx)/rx)**2+((z-cz)/rz)**2));
+ let lift=0;for(const d of START_LANDFORMS.dunes)lift+=bump(...d);
+ lift+=bump(...START_LANDFORMS.knoll);
+ // The island's two old hills stand a little taller, so their terraces read from the landing.
+ lift+=.25*Math.max(0,raw-1.45);
+ const [px,pz,prx,prz]=START_LANDFORMS.pond,pr=Math.hypot((x-px)/prx,(z-pz)/prz);
+ return raw+lift*land-(pr<1.6?(1.6-pr)/1.6*3.2:0);
+}
+function gridShaped(x,z){
+ const g=gridTerrainSpec;
+ if(!g||x<-64||x>64||z<-128||z>64)return rawHeight(x,z);
+ // Everything blends back to the original island over the last ten metres of the detailed area, so no seam shows.
+ const raw=rawHeight(x,z),fade=smooth(0,10,Math.min(x+64,64-x,z+128,64-z));if(fade<=0)return raw;
+ const base=startBase(x,z);if(base<.25)return raw+(base-raw)*fade;
+ // Level steps: flat around each cell centre, a soft ramp across the middle 60% between centres (smoothstep weights).
+ const u=(x-g.ox)/g.cell,v=(z-g.oz)/g.cell,i=Math.floor(u),j=Math.floor(v),fu=u-i,fv=v-j;
+ const w=t=>smooth(.2,.8,t),wu=w(fu),wv=w(fv),c=(a,b)=>startBase(g.ox+a*g.cell,g.oz+b*g.cell);
+ const step=(c(i,j)*(1-wu)+c(i+1,j)*wu)*(1-wv)+(c(i,j+1)*(1-wu)+c(i+1,j+1)*wu)*wv;
+ // Shores keep their natural line: the steps fade in only once the ground is clearly above the sea.
+ const k=TERRACE*smooth(.25,1.1,Math.min(base,step)),shaped=base+(step-base)*k;
+ return raw+(shaped-raw)*fade;
+}
 // The collision surface uses the same triangles as the mesh. Camera height never chases a different floor.
 export function terrainStep(x,z){return x>=-64&&x<=64&&z>=-128&&z<=64?2:8;}
 // Static grid vertices are shared by drawing, collision and camera height. About 0.3 MB, no per-frame map churn.
@@ -60,7 +94,7 @@ function sampledHeight(x,z){
  if(x%8===0&&z%8===0){const ix=(x-WORLD_BOUNDS.minX)/8,iz=(z-WORLD_BOUNDS.minZ)/8;if(ix>=0&&ix<coarseColumns&&iz>=0&&iz<coarseRows){cache=coarseHeights;index=iz*coarseColumns+ix;}}
  else if(x>=-64&&x<=64&&z>=-128&&z<=64){cache=fineHeights;index=((z+128)/2)*65+(x+64)/2;}
  if(!cache)return rawHeight(x,z);
- let h=cache[index];if(Number.isNaN(h)){h=rawHeight(x,z);cache[index]=h;}return h;
+ let h=cache[index];if(Number.isNaN(h)){h=gridShaped(x,z);cache[index]=h;}return h;
 }
 function vertexHeight(x,z){
  if(z===-128&&x>=-64&&x<=64){const a=Math.floor(x/8)*8,t=(x-a)/8;return sampledHeight(a,z)*(1-t)+sampledHeight(a+8,z)*t;}

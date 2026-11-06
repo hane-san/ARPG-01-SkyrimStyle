@@ -176,8 +176,10 @@ with sync_playwright() as pw:
  t=time.time();touch('touchStart',150,700,t);mobile.wait_for_function(f'nagi.grid.holdClicks>{clicks}',timeout=15000)
  touch('touchMove',150+30,702,t+.3);touch('touchMove',150+90,702,t+.35)
  mobile.wait_for_function('nagi.grid.look<-.3',timeout=15000)
+ # The glance leans a little into the distance (D020), and the plain view returns when the finger lifts.
+ mobile.wait_for_function('nagi.fov<62',timeout=15000)
  assert grid('heading')==heading and grid('turns')==turns+2 and grid('holdClicks')==clicks+1
- touch('touchEnd');mobile.wait_for_function('Math.abs(nagi.grid.look)<.01',timeout=15000);assert grid('heading')==heading
+ touch('touchEnd');mobile.wait_for_function('Math.abs(nagi.grid.look)<.01 && nagi.fov===68',timeout=15000);assert grid('heading')==heading
  # Held press, then a long look: it eases into 45 degrees and only the eyes move; sliding up as well does not walk.
  turns,clicks,before=grid('turns'),grid('holdClicks'),actions()
  t=time.time();touch('touchStart',100,700,t);mobile.wait_for_function(f'nagi.grid.holdClicks>{clicks}',timeout=15000)

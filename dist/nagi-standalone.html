@@ -208,6 +208,40 @@ function rawHeight(x,z){
  east=Math.max(east,3.2-distanceToRoute(x,z,returnPaths)*.2);
  return Math.max(old,land,east,-3);
 }
+// Grid travel (D020) reshapes only the detailed first area: a little more relief and a few new landforms near the
+// landing (dunes, a lookout knoll, a small pond), then every cell becomes a level step joined to its neighbours by
+// a soft ramp, so the ground matches the one-cell walk. Free walking (?grid=0) keeps the original island exactly.
+let gridTerrainSpec=null;const TERRACE=.9;
+function useGridTerrain(origin,cell){gridTerrainSpec={ox:origin[0],oz:origin[1],cell};coarseHeights.fill(NaN);fineHeights.fill(NaN);}
+const START_LANDFORMS=Object.freeze({
+ dunes:[[17,22,6,4,1.5],[-5,21,5,3.5,1.2],[2,26,3.5,3,.7]],
+ knoll:[27,-2,8,7,2.4],
+ pond:[-11,27,4.5,3.4]
+});
+function startBase(x,z){
+ const raw=rawHeight(x,z);if(raw<.3)return raw;
+ const land=smooth(.3,1.1,raw),bump=(cx,cz,rx,rz,h)=>h*Math.exp(-(((x-cx)/rx)**2+((z-cz)/rz)**2));
+ let lift=0;for(const d of START_LANDFORMS.dunes)lift+=bump(...d);
+ lift+=bump(...START_LANDFORMS.knoll);
+ // The island's two old hills stand a little taller, so their terraces read from the landing.
+ lift+=.25*Math.max(0,raw-1.45);
+ const [px,pz,prx,prz]=START_LANDFORMS.pond,pr=Math.hypot((x-px)/prx,(z-pz)/prz);
+ return raw+lift*land-(pr<1.6?(1.6-pr)/1.6*3.2:0);
+}
+function gridShaped(x,z){
+ const g=gridTerrainSpec;
+ if(!g||x<-64||x>64||z<-128||z>64)return rawHeight(x,z);
+ // Everything blends back to the original island over the last ten metres of the detailed area, so no seam shows.
+ const raw=rawHeight(x,z),fade=smooth(0,10,Math.min(x+64,64-x,z+128,64-z));if(fade<=0)return raw;
+ const base=startBase(x,z);if(base<.25)return raw+(base-raw)*fade;
+ // Level steps: flat around each cell centre, a soft ramp across the middle 60% between centres (smoothstep weights).
+ const u=(x-g.ox)/g.cell,v=(z-g.oz)/g.cell,i=Math.floor(u),j=Math.floor(v),fu=u-i,fv=v-j;
+ const w=t=>smooth(.2,.8,t),wu=w(fu),wv=w(fv),c=(a,b)=>startBase(g.ox+a*g.cell,g.oz+b*g.cell);
+ const step=(c(i,j)*(1-wu)+c(i+1,j)*wu)*(1-wv)+(c(i,j+1)*(1-wu)+c(i+1,j+1)*wu)*wv;
+ // Shores keep their natural line: the steps fade in only once the ground is clearly above the sea.
+ const k=TERRACE*smooth(.25,1.1,Math.min(base,step)),shaped=base+(step-base)*k;
+ return raw+(shaped-raw)*fade;
+}
 // The collision surface uses the same triangles as the mesh. Camera height never chases a different floor.
 function terrainStep(x,z){return x>=-64&&x<=64&&z>=-128&&z<=64?2:8;}
 // Static grid vertices are shared by drawing, collision and camera height. About 0.3 MB, no per-frame map churn.
@@ -218,7 +252,7 @@ function sampledHeight(x,z){
  if(x%8===0&&z%8===0){const ix=(x-WORLD_BOUNDS.minX)/8,iz=(z-WORLD_BOUNDS.minZ)/8;if(ix>=0&&ix<coarseColumns&&iz>=0&&iz<coarseRows){cache=coarseHeights;index=iz*coarseColumns+ix;}}
  else if(x>=-64&&x<=64&&z>=-128&&z<=64){cache=fineHeights;index=((z+128)/2)*65+(x+64)/2;}
  if(!cache)return rawHeight(x,z);
- let h=cache[index];if(Number.isNaN(h)){h=rawHeight(x,z);cache[index]=h;}return h;
+ let h=cache[index];if(Number.isNaN(h)){h=gridShaped(x,z);cache[index]=h;}return h;
 }
 function vertexHeight(x,z){
  if(z===-128&&x>=-64&&x<=64){const a=Math.floor(x/8)*8,t=(x-a)/8;return sampledHeight(a,z)*(1-t)+sampledHeight(a+8,z)*t;}
@@ -483,7 +517,7 @@ class JourneyNotices {
 // No DOM, WebGL or audio. The world supplies walkable(), height() and the swept move() of CollisionWorld.
 // 7.5 m cells. A held walk glides through cells at a constant 18.75 m/s (Shift: about 26 m/s);
 // it eases in from rest and eases out when the finger or key lets go, instead of pausing at every cell.
-const CELL=7.5,GRID_ORIGIN=Object.freeze([8,30]),STEP_SECONDS=.4,QUICK_STEP_SECONDS=.29,TURN_SECONDS=.55,TURN_AROUND_SECONDS=.95,TURN_REPEAT_PAUSE=.2,SLOW_STEP_SECONDS=.45,SLOW_REST_SECONDS=.1,STROLL_STEP_SECONDS=.52,SIDE_STEP_SECONDS=.46,BUMP_SECONDS=.26,EYE_HEIGHT=2.1,EYE_SETTLE_SECONDS=.1,EYE_FLOOR=1.4,EYE_SPREAD=2.6;
+const CELL=7.5,GRID_ORIGIN=Object.freeze([8,30]),STEP_SECONDS=.4,QUICK_STEP_SECONDS=.29,TURN_SECONDS=.55,TURN_AROUND_SECONDS=.95,TURN_REPEAT_PAUSE=.2,SLOW_STEP_SECONDS=.45,SLOW_REST_SECONDS=.1,STROLL_STEP_SECONDS=.52,SIDE_STEP_SECONDS=.46,BUMP_SECONDS=.26,EYE_HEIGHT=1.63,EYE_SETTLE_SECONDS=.1,EYE_FLOOR=1.4,EYE_SPREAD=2.6;
 // Headings are compass quarters: 0 north (-z), 1 east (+x), 2 south (+z), 3 west (-x).
 // A grid cell keeps this much room around the body at its centre, so no step stops with your nose on a rock (D018).
 const GRID_CLEARANCE=1.2;
@@ -491,9 +525,12 @@ const HEADINGS=Object.freeze([[0,-1],[1,0],[0,1],[-1,0]]);
 const HEADING_NAMES=Object.freeze(['北','東','南','西']);
 const headingYaw=h=>-((h%4+4)%4)*Math.PI/2;
 function nearestHeading(yaw){return ((Math.round(-yaw/(Math.PI/2))%4)+4)%4;}
-// A turn answers at once (D019): it leaves with a gentle, already-moving start (1.2 times the average pace, so there is
-// no wind-up before the view moves) and settles softly with zero velocity, never overshooting.
-const TURN_START_SLOPE=1.2,turnEase=t=>hermite(t,TURN_START_SLOPE,0);
+// A turn moves like a head and body turning (D020): it picks up speed almost at once, with no jolt (the speed rises
+// continuously from zero, as t^0.7), peaks early and then slows down gently over the longer second part, coming to
+// rest with zero speed and zero deceleration. Speed profile t^0.7 (1-t)^2, integrated once into a lookup table.
+const TURN_PROFILE=((()=>{const n=512,out=new Float64Array(n+1);let sum=0;const v=t=>Math.pow(t,.7)*(1-t)**2;
+ for(let k=1;k<=n;k++){sum+=(v((k-1)/n)+v(k/n))/2;out[k]=sum;}for(let k=0;k<=n;k++)out[k]/=sum;return out;})());
+const turnEase=t=>{if(t<=0)return 0;if(t>=1)return 1;const f=t*(TURN_PROFILE.length-1),k=Math.floor(f);return TURN_PROFILE[k]+(TURN_PROFILE[k+1]-TURN_PROFILE[k])*(f-k);};
 // Cubic Hermite from 0 to 1 with start/end slopes m0/m1 (in units of the whole move per duration).
 function hermite(w,m0,m1){const w2=w*w,w3=w2*w;return (w3-2*w2+w)*m0+(-2*w3+3*w2)+(w3-w2)*m1;}
 function hermiteSlope(w,m0,m1){return (3*w*w-4*w+1)*m0+(6*w-6*w*w)+(3*w*w-2*w)*m1;}
@@ -950,6 +987,8 @@ class RegionMusic {
 // Dungeon-crawler travel is the default (producer decision 2026-11-04): the same island, one grid cell at a time.
 // ?grid=0 keeps the earlier free walking for comparison and its regression checks.
 const GRID_MODE=new URLSearchParams(location.search).get('grid')!=='0';
+// The first area's ground takes level steps that match the walk (D020), before anything reads a height.
+if(GRID_MODE)useGridTerrain(GRID_ORIGIN,CELL);
 const canvas=document.querySelector('#world'),gl=canvas.getContext('webgl',{antialias:true,alpha:false,powerPreference:'high-performance'});
 if(!gl){document.querySelector('#error').hidden=false;document.querySelector('#begin').disabled=true;throw Error('WebGL unavailable');}
 const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -1038,6 +1077,9 @@ function gridProp(place,blocks=()=>true,search=false){
  return (x,z,...rest)=>{if(!blocks(...rest))return place(x,z,...rest);const c=claimCell(x,z,search);return c?place(c[0],c[1],...rest):undefined;};
 }
 const [tx,tz]=gatewayCell(23,8),[sx,sz]=gatewayCell(-4,-13);
+// In grid mode the torii stands on the line between its road cell and the one before it (D020): you walk through the
+// gate between two steps, and never stand inside it with a post filling the view to either side.
+const toriiZ=(()=>{if(!GRID_MODE)return tz;const [i,j]=cellIndex(tx,tz);return roadCells.has(i+','+(j+1))?tz+CELL/2:roadCells.has(i+','+(j-1))?tz-CELL/2:tz;})();
 // Issue #21 set pieces own these rectangles (x0,x1,z0,z1): no random tree or rock grows inside them in either mode.
 // Set pieces sit on cell centres in both modes, so they fit the grid's cells exactly whatever the cell size.
 const snapCentre=(x,z)=>cellCentre(...cellIndex(x,z)),cellRect=([x,z],i0,i1,j0,j1)=>[x+(i0-.5)*CELL,x+(i1+.5)*CELL,z+(j0-.5)*CELL,z+(j1+.5)*CELL];
@@ -1130,6 +1172,8 @@ const obstacles=[],steppingStones=[];
 // Walls large enough to press a face against use their drawn eye-level footprint plus this margin, so the 0.18 m
 // near plane never enters the model, even looking along a wall in landscape (aspect up to 2.4). About 0.11 m.
 const CAMERA_FOV=68,CAMERA_NEAR=.18,WALL_MARGIN=nearPlaneMargin(CAMERA_NEAR,CAMERA_FOV,2.4);
+// Looking around after a press-in narrows the view a little toward the distance (D020); free walking keeps 68 always.
+const LOOK_FOV=58;let viewFov=CAMERA_FOV;
 const addCircle=(x,z,r,kind='solid')=>obstacles.push(circleCollider(x,z,r,kind));
 const addBox=(x,z,hx,hz,kind='solid')=>obstacles.push(boxCollider(x,z,hx,hz,kind));
 function rock(x,z,s){let y=height(x,z);sphere(x,y+s*.23,z,s,s*.55,s*.72,pal.stone,7,4);if(s>.7&&y>.3)addCircle(x,z,s*.6);}
@@ -1149,7 +1193,7 @@ for(let i=0;i<34;i++){const x=rnd(-28,28),z=rnd(-29,30);if(height(x,z)>1&&routeD
 // Tiny pastel grass, flowers, and salt-worn pebbles.
 for(let i=0;i<600;i++){const x=rnd(-34,34),z=rnd(-38,38),y=height(x,z);if(y<1||routeDistance(x,z)<2)continue;const s=rnd(.12,.35),c=i%5===0?pal.pink:hex('a0b393');tri([x-.09,y,z],[x,y+s,z],[x+.09,y,z],c);tri([x,y,z-.09],[x,y+s,z],[x,y,z+.09],c);if(i%11===0)sphere(x,y+s,z,.07,.06,.07,pal.cream,5,3);}
 // Torii, with a subdued vermilion pigment washed by sea air.
-const ty=height(tx,tz);for(const x of [tx-1.55,tx+1.55]){cone(x,ty,tz,.17,.14,3.8,pal.red,9);box(x,ty-.02,tz,.6,.18,.6,pal.stone);}box(tx,ty+2.9,tz,3.8,.2,.22,pal.red);box(tx,ty+3.65,tz,4.6,.25,.43,pal.red);box(tx,ty+3.91,tz,4.9,.1,.54,hex('76877e'));box(tx,ty+3.1,tz,.3,.5,.14,pal.cream);addCircle(tx-1.55,tz,.14,'gate');addCircle(tx+1.55,tz,.14,'gate');
+const ty=height(tx,toriiZ);for(const x of [tx-1.55,tx+1.55]){cone(x,ty,toriiZ,.17,.14,3.8,pal.red,9);box(x,ty-.02,toriiZ,.6,.18,.6,pal.stone);}box(tx,ty+2.9,toriiZ,3.8,.2,.22,pal.red);box(tx,ty+3.65,toriiZ,4.6,.25,.43,pal.red);box(tx,ty+3.91,toriiZ,4.9,.1,.54,hex('76877e'));box(tx,ty+3.1,toriiZ,.3,.5,.14,pal.cream);addCircle(tx-1.55,toriiZ,.14,'gate');addCircle(tx+1.55,toriiZ,.14,'gate');
 // An empty, open-sided hill shrine. The floor remains walkable.
 const sy=height(sx,sz);box(sx,sy-.2,sz,5.5,.25,4.5,pal.stone);box(sx,sy+.05,sz,4.6,.18,3.7,hex('b5aa94'));for(const x of [sx-2,sx+2])for(const z of [sz-1.5,sz+1.5]){box(x,sy+.2,z,.16,2.7,.16,pal.bark);addCircle(x,z,.06,'pillar');}box(sx,sy+2.8,sz,4.5,.18,3.8,pal.bark);
 for(const sign of [-1,1]){const a=[sx-2.9,sy+2.9,sz+sign*2.3],b=[sx+2.9,sy+2.9,sz+sign*2.3],c=[sx+2.9,sy+4,sz],d=[sx-2.9,sy+4,sz];quad(a,b,c,d,hex('889c98'));}box(sx,sy+4,sz,6,.13,.18,hex('7c8f8a'));cone(sx,sy+.2,sz,.48,.4,.6,pal.stone,8);
@@ -1600,6 +1644,30 @@ sceneryBatch(3,14,16);
  sceneryBatch(-31,22,24);
 }
 
+// D020: the new landforms near the landing (grid mode only). A lookout knoll with a lone pine and a cairn, a small pond
+// ringed by reeds, stones and lily pads, and beach grass on the dunes. Their own seeded stream leaves every other
+// seeded layout where it was.
+if(GRID_MODE){
+ let seed=90121;const srnd=(a,b)=>{seed=(1664525*seed+1013904223)>>>0;return a+(b-a)*seed/4294967296;};
+ const [kx,kz]=START_LANDFORMS.knoll,[px,pz,prx,prz]=START_LANDFORMS.pond;
+ // The pine takes the knoll's top cell (or the nearest free one) and really blocks it; the cairn sits at its foot.
+ const top=spot(kx,kz);
+ if(top){const [x,z]=top,y=height(x,z);branch([x,y,z],[x+.1,y+3.6,z],.17,pal.bark);
+  for(let k=0;k<4;k++)cone(x+.05*k,y+(1.5+k*.85),z,1.75-k*.38,0,1.55-k*.18,hex(k%2?'6f8f7c':'7d9c86'),10);addCircle(x,z,.32,'tree');
+  for(let k=0;k<5;k++){const r=.42-k*.07;sphere(x+1.25,y+.12+k*.2,z+.9,r,.12,r*.85,k%2?pal.stone:hex('b7beb4'),7,3);}}
+ // Reeds and stones on the pond's dry rim, lily pads on the water.
+ for(let i=0;i<90;i++){const a=srnd(0,Math.PI*2),r=srnd(1.45,1.85),x=px+Math.cos(a)*prx*r,z=pz+Math.sin(a)*prz*r,y=height(x,z);
+  if(y<.2||y>1.7||roadCells.has(cellIndex(x,z).join(',')))continue;
+  if(i%6===0)sphere(x,y+.08,z,.32,.16,.26,pal.stone,6,3);
+  else for(let j=0;j<3;j++)branch([x+j*.1,y,z],[x+j*.1+srnd(-.08,.08),y+srnd(.7,1.35),z+srnd(-.06,.06)],.022,j%2?hex('a8b28f'):pal.cream);}
+ for(let i=0;i<9;i++){const a=srnd(0,Math.PI*2),r=srnd(0,.75),x=px+Math.cos(a)*prx*r,z=pz+Math.sin(a)*prz*r;if(height(x,z)<-.15)seaDisc(x,z,srnd(.35,.6),i%3?hex('9db58f'):hex('d7b7c0'),7);}
+ // Beach grass on the dunes.
+ for(const [dx,dz,rx,rz] of START_LANDFORMS.dunes)for(let i=0;i<70;i++){const x=dx+srnd(-1,1)*rx,z=dz+srnd(-1,1)*rz,y=height(x,z);
+  if(y<.6||roadCells.has(cellIndex(x,z).join(',')))continue;const s=srnd(.3,.65),c=i%4?hex('b7bf9a'):pal.cream;
+  tri([x-.07,y,z],[x+srnd(-.15,.15),y+s,z],[x+.07,y,z],c);tri([x,y,z-.07],[x,y+s*.9,z+srnd(-.15,.15)],[x,y,z+.07],c);}
+ sceneryBatch(8,10,32);
+}
+
 // Low wooden fences run along stretches of the grid roads, so a road reads as a path to follow. They stand on the cell
 // boundary beside the road and really block that side; regular gaps, junctions, plazas near named places, set pieces,
 // islanders and their approach cells stay open, so every place can still be reached (grid-check walks it all).
@@ -1680,7 +1748,7 @@ const notices=new JourneyNotices(),seenScenes=new Set(),sceneDwell=new Map();
 const placeNode=document.querySelector('#place'),greetingNode=document.querySelector('#greeting'),travelBook=document.querySelector('#travel-book');
 let noticeContent=null,paintedNotice=null,previousMovement=false,stillFor=1;
 function resize(){const d=Math.min(devicePixelRatio||1,1.5),w=Math.round(innerWidth*d),h=Math.round(innerHeight*d);if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;gl.viewport(0,0,w,h);}}addEventListener('resize',resize);resize();
-function vp(){const f=1/Math.tan(CAMERA_FOV*Math.PI/360),aspect=canvas.width/canvas.height,n=CAMERA_NEAR,far=2600,proj=[f/aspect,0,0,0,0,f,0,0,0,0,(far+n)/(n-far),-1,0,0,2*far*n/(n-far),0];const c=Math.cos(camera.yaw),s=Math.sin(camera.yaw),view=[c,0,s,0,0,1,0,0,-s,0,c,0,-c*camera.x+s*camera.z,-camera.y,-s*camera.x-c*camera.z,1],out=new Float32Array(16);for(let j=0;j<4;j++)for(let i=0;i<4;i++){let v=0;for(let k=0;k<4;k++)v+=proj[k*4+i]*view[j*4+k];out[j*4+i]=v;}return out;}
+function vp(){const f=1/Math.tan(viewFov*Math.PI/360),aspect=canvas.width/canvas.height,n=CAMERA_NEAR,far=2600,proj=[f/aspect,0,0,0,0,f,0,0,0,0,(far+n)/(n-far),-1,0,0,2*far*n/(n-far),0];const c=Math.cos(camera.yaw),s=Math.sin(camera.yaw),view=[c,0,s,0,0,1,0,0,-s,0,c,0,-c*camera.x+s*camera.z,-camera.y,-s*camera.x-c*camera.z,1],out=new Float32Array(16);for(let j=0;j<4;j++)for(let i=0;i<4;i++){let v=0;for(let k=0;k<4;k++)v+=proj[k*4+i]*view[j*4+k];out[j*4+i]=v;}return out;}
 const DRAW_ORIGIN=[0,0,0],WORLD_SCENERY_BOUNDS={x:0,z:-25,r:100},CAMERA_AXES=['x','y','z','yaw'];
 let drawnVertices=0,drawCalls=0,viewCos=1,viewSin=0,viewTangent=1,viewPadding=1;
 function draw(b,offset=DRAW_ORIGIN,yaw=0,water=0,roll=0){gl.bindBuffer(gl.ARRAY_BUFFER,b.buffer);for(let i=0;i<3;i++){gl.enableVertexAttribArray(attrs[i]);gl.vertexAttribPointer(attrs[i],3,gl.FLOAT,false,36,i*12);}gl.uniform3fv(loc.uOffset,offset);gl.uniform1f(loc.uYaw,yaw);gl.uniform1f(loc.uRoll,roll);gl.uniform1f(loc.uWater,water);gl.drawArrays(gl.TRIANGLES,0,b.count);drawnVertices+=b.count;drawCalls++;}
@@ -1690,9 +1758,9 @@ function visible(b,range=1450){
  return forward>-b.r&&Math.abs(side)<=Math.max(0,forward)*viewTangent+b.r*viewPadding;
 }
 function render(){
- viewCos=Math.cos(camera.yaw);viewSin=Math.sin(camera.yaw);viewTangent=Math.tan(CAMERA_FOV*Math.PI/360)*canvas.width/canvas.height;viewPadding=Math.hypot(1,viewTangent);
+ viewCos=Math.cos(camera.yaw);viewSin=Math.sin(camera.yaw);viewTangent=Math.tan(viewFov*Math.PI/360)*canvas.width/canvas.height;viewPadding=Math.hypot(1,viewTangent);
  drawnVertices=0;drawCalls=0;gl.disable(gl.DEPTH_TEST);gl.useProgram(skyProg);gl.bindBuffer(gl.ARRAY_BUFFER,skyBuf);const a=gl.getAttribLocation(skyProg,'a');gl.enableVertexAttribArray(a);gl.vertexAttribPointer(a,2,gl.FLOAT,false,0,0);
- gl.uniform1f(skyLoc.yaw,camera.yaw);gl.uniform1f(skyLoc.aspect,canvas.width/canvas.height);gl.uniform1f(skyLoc.tanHalfFov,Math.tan(CAMERA_FOV*Math.PI/360));gl.uniform3fv(skyLoc.moonDirection,MOON_DIRECTION);gl.uniform3fv(skyLoc.skyLow,skyMood.low);gl.uniform3fv(skyLoc.skyHigh,skyMood.high);gl.drawArrays(gl.TRIANGLES,0,3);
+ gl.uniform1f(skyLoc.yaw,camera.yaw);gl.uniform1f(skyLoc.aspect,canvas.width/canvas.height);gl.uniform1f(skyLoc.tanHalfFov,Math.tan(viewFov*Math.PI/360));gl.uniform3fv(skyLoc.moonDirection,MOON_DIRECTION);gl.uniform3fv(skyLoc.skyLow,skyMood.low);gl.uniform3fv(skyLoc.skyHigh,skyMood.high);gl.drawArrays(gl.TRIANGLES,0,3);
  gl.enable(gl.DEPTH_TEST);gl.clear(gl.DEPTH_BUFFER_BIT);gl.useProgram(prog);gl.uniformMatrix4fv(loc.uVP,false,vp());gl.uniform3f(loc.uEye,camera.x,camera.y,camera.z);gl.uniform1f(loc.uTime,reduced?0:time);gl.uniform3fv(loc.uFog,skyMood.low);
  // The far snow ridge keeps its shape through a thinner haze; everything else uses the ordinary fog.
  gl.uniform1f(loc.uFogScale,.32);draw(mountains);gl.uniform1f(loc.uFogScale,1);
@@ -1753,6 +1821,8 @@ function gridUpdate(dt){
  lookYaw+=(-gridGesture.look*Math.PI/2-lookYaw)*(1-Math.exp(-dt*(looking?12:6)));
  // Settled means settled: the easing would otherwise creep toward zero forever.
  if(!looking&&Math.abs(lookYaw)<1e-4)lookYaw=0;
+ // The glance leans a little into the distance, and eases back out when the finger lifts.
+ viewFov+=((looking?LOOK_FOV:CAMERA_FOV)-viewFov)*(1-Math.exp(-dt*(looking?5:4)));if(!looking&&Math.abs(viewFov-CAMERA_FOV)<1e-3)viewFov=CAMERA_FOV;
  const held=heldCommand();
  // Letting go (or changing direction) mid-step slows to a stop on the cell being entered.
  if(held!==activeCommand)walker.easeOut();
@@ -2028,10 +2098,10 @@ function drawAutomap(){
 }
 if(GRID_MODE){
  document.body.classList.add('grid-mode');
- canvas.setAttribute('aria-label',canvas.getAttribute('aria-label').split('。')[0]+'。マス目を一つずつ歩きます。W/Sで一マス前後、A/Dで横へ一マス、Q/Eまたは左右矢印で90度向きを変え、Xで振り返ります。画面下半分では、上へはじくと一歩前へ（押したままで一歩ずつ進み続ける）、下へはじくと一歩後ろへ、左右へはじくとすぐに90度向きを変えます。一度押し込んで音がしてから左右へ滑らせると、見渡すだけで（左右45度ほどまで）、向きは変わりません。カニ歩きは画面下の左右の隅にある薄いボタンで。軽く触れると一マス進みます。');
- const notes=document.querySelector('.notes p');if(notes)notes.innerHTML='マス目をひとつずつ歩く。下半分で<b>はじく</b>：上で一歩前へ（押したままで一歩ずつ進み続ける）、下で一歩後ろ、<b>左右ですぐに向きを変える</b>。<br><b>一度押し込んで「カチッ」→ 左右へ滑らせる</b>と見渡すだけ（左右45度ほどまで、離すと正面へ）。<br>カニ歩きは左右の隅の薄いボタン。軽く触れると一マス。PCは W A S D · Q E · ← → · X。';
+ canvas.setAttribute('aria-label',canvas.getAttribute('aria-label').split('。')[0]+'。マス目を一つずつ歩きます。W/Sで一マス前後、A/Dで横へ一マス、Q/Eまたは左右矢印で90度向きを変え、Xで振り返ります。画面下半分では、上へはじくと一歩前へ（押したままで一歩ずつ進み続ける）、下へはじくと一歩後ろへ、左右へはじくとすぐに90度向きを変えます。一度押し込んで音がしてから左右へ滑らせると、少し遠くへ寄りながら見渡すだけで（左右45度ほどまで）、向きは変わりません。カニ歩きは画面下の左右の隅にある薄いボタンで。軽く触れると一マス進みます。');
+ const notes=document.querySelector('.notes p');if(notes)notes.innerHTML='マス目をひとつずつ歩く。下半分で<b>はじく</b>：上で一歩前へ（押したままで一歩ずつ進み続ける）、下で一歩後ろ、<b>左右ですぐに向きを変える</b>。<br><b>一度押し込んで「カチッ」→ 左右へ滑らせる</b>と、少し遠くへ寄って見渡すだけ（左右45度ほどまで、離すと正面へ）。<br>カニ歩きは左右の隅の薄いボタン。軽く触れると一マス。PCは W A S D · Q E · ← → · X。';
  const book=document.querySelector('.book-controls');
- if(book)book.innerHTML='<h3>マス目を歩く</h3><p><b>はじく＝一歩・向き替え</b><br>上：一歩前へ（押したままで一歩ずつ進み続ける）／下：一歩後ろへ<br>左右：はじいた瞬間に、なめらかに90度向きを変える<br><b>一度押し込んで「カチッ」→ 左右へ滑らせる＝見渡す</b><br>視線だけが指についてきて、左右45度ほどでやわらかく止まります（向きは変わりません）。離すと正面に戻ります。<br><b>カニ歩き</b>：画面下の左右の隅にある薄いボタン。押すたび一マス、押したままで続けて。<br>軽く触れると一マス進みます。</p><p class="keyboard-notes">PC：W / S で前後 ／ A / D で横へ一マス ／ Q E ・ ← → で向き替え ／ X で振り返る<br>Shift で早足 ／ M で地図 ／ H でしおり ／ Esc で入力解除</p>';
+ if(book)book.innerHTML='<h3>マス目を歩く</h3><p><b>はじく＝一歩・向き替え</b><br>上：一歩前へ（押したままで一歩ずつ進み続ける）／下：一歩後ろへ<br>左右：はじいた瞬間に、なめらかに90度向きを変える<br><b>一度押し込んで「カチッ」→ 左右へ滑らせる＝見渡す</b><br>視線だけが指についてきて、少し遠くへ寄りながら、左右45度ほどでやわらかく止まります（向きは変わりません）。離すと正面に戻ります。<br><b>カニ歩き</b>：画面下の左右の隅にある薄いボタン。押すたび一マス、押したままで続けて。<br>軽く触れると一マス進みます。</p><p class="keyboard-notes">PC：W / S で前後 ／ A / D で横へ一マス ／ Q E ・ ← → で向き替え ／ X で振り返る<br>Shift で早足 ／ M で地図 ／ H でしおり ／ Esc で入力解除</p>';
 }
 // Side-step buttons (D016): pressing one is a step sideways; holding it walks on, one eased cell at a time. A press too
 // quick to act before release is queued, so it is never lost. They never take focus, so the walk is not interrupted.
@@ -2059,7 +2129,7 @@ canvas.addEventListener('webglcontextlost',()=>{
  const error=document.querySelector('#error');error.textContent='島を読み込めませんでした。ページを開き直してください。';error.hidden=false;
 });
 // Minimal diagnostic state for development; no interface is added during play.
-window.nagi={get release(){return document.querySelector('meta[name="nagi-release"]')?.content||'local'},get position(){return{x:player.x,z:player.z,yaw:player.yaw}},get camera(){return{...camera}},get turningRate(){return player.yawRate},get continuousRun(){return player.runSeconds},get surge(){return player.surge},get collisionChecks(){return collisionWorld.checks},get actualSpeed(){return player.actualSpeed},get blockedFor(){return player.blockedFor},get monuments(){return monuments.length},get renderedVertices(){return drawnVertices},get drawCalls(){return drawCalls},get started(){return started},get speed(){return Math.hypot(player.vx,player.vz)},get dragging(){return gestures.held},get fov(){return CAMERA_FOV},get greetingDistance(){return lastGreetingDistance},get footsteps(){return footstepCount},get audioState(){return audioCtx?.state||'unavailable'},get footSurface(){return lastFootSurface},get worldVertices(){return terrain.count+roadChunks.reduce((n,b)=>n+b.count,0)+world.count+sea.count+scenery.reduce((n,b)=>n+b.count,0)+movingSails.reduce((n,b)=>n+b.count,0)+birdMesh.count},get places(){return [...shownPlaces]},get islanders(){return npcs.length},get greeted(){return npcs.reduce((a,n)=>a+n.index,0)},get region(){return regionTracker.current.id},get musicTrack(){return music?.trackId||null},get skyHorizon(){return [...skyMood.low]},get grid(){return walker?{look:lookYaw,holdClicks,cell:CELL,road:roadCells.has(walker.i+','+walker.j),i:walker.i,j:walker.j,heading:walker.heading,steps:walker.steps,turns:walker.turns,bumps:walker.bumps,visited:walker.visited.size,busy:walker.busy,automap:!automap.hidden}:null}};
+window.nagi={get release(){return document.querySelector('meta[name="nagi-release"]')?.content||'local'},get position(){return{x:player.x,z:player.z,yaw:player.yaw}},get camera(){return{...camera}},get turningRate(){return player.yawRate},get continuousRun(){return player.runSeconds},get surge(){return player.surge},get collisionChecks(){return collisionWorld.checks},get actualSpeed(){return player.actualSpeed},get blockedFor(){return player.blockedFor},get monuments(){return monuments.length},get renderedVertices(){return drawnVertices},get drawCalls(){return drawCalls},get started(){return started},get speed(){return Math.hypot(player.vx,player.vz)},get dragging(){return gestures.held},get fov(){return viewFov},get greetingDistance(){return lastGreetingDistance},get footsteps(){return footstepCount},get audioState(){return audioCtx?.state||'unavailable'},get footSurface(){return lastFootSurface},get worldVertices(){return terrain.count+roadChunks.reduce((n,b)=>n+b.count,0)+world.count+sea.count+scenery.reduce((n,b)=>n+b.count,0)+movingSails.reduce((n,b)=>n+b.count,0)+birdMesh.count},get places(){return [...shownPlaces]},get islanders(){return npcs.length},get greeted(){return npcs.reduce((a,n)=>a+n.index,0)},get region(){return regionTracker.current.id},get musicTrack(){return music?.trackId||null},get skyHorizon(){return [...skyMood.low]},get grid(){return walker?{look:lookYaw,holdClicks,cell:CELL,road:roadCells.has(walker.i+','+walker.j),i:walker.i,j:walker.j,heading:walker.heading,steps:walker.steps,turns:walker.turns,bumps:walker.bumps,visited:walker.visited.size,busy:walker.busy,automap:!automap.hidden}:null}};
 
 </script>
 </body></html>
