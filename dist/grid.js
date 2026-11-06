@@ -2,7 +2,7 @@
 // No DOM, WebGL or audio. The world supplies walkable(), height() and the swept move() of CollisionWorld.
 // 7.5 m cells. A held walk glides through cells at a constant 18.75 m/s (Shift: about 26 m/s);
 // it eases in from rest and eases out when the finger or key lets go, instead of pausing at every cell.
-export const CELL=7.5,GRID_ORIGIN=Object.freeze([8,30]),STEP_SECONDS=.4,QUICK_STEP_SECONDS=.29,TURN_SECONDS=.55,TURN_AROUND_SECONDS=.95,TURN_REPEAT_PAUSE=.2,SLOW_STEP_SECONDS=.45,SLOW_REST_SECONDS=.1,STROLL_STEP_SECONDS=.52,SIDE_STEP_SECONDS=.46,BUMP_SECONDS=.26,EYE_HEIGHT=2.1,EYE_SETTLE_SECONDS=.1,EYE_FLOOR=1.4,EYE_SPREAD=2.6;
+export const CELL=7.5,GRID_ORIGIN=Object.freeze([8,30]),STEP_SECONDS=.4,QUICK_STEP_SECONDS=.29,TURN_SECONDS=.55,TURN_AROUND_SECONDS=.95,TURN_REPEAT_PAUSE=.2,SLOW_STEP_SECONDS=.45,SLOW_REST_SECONDS=.1,STROLL_STEP_SECONDS=.52,SIDE_STEP_SECONDS=.46,BUMP_SECONDS=.26,EYE_HEIGHT=1.63,EYE_SETTLE_SECONDS=.1,EYE_FLOOR=1.4,EYE_SPREAD=2.6;
 // Headings are compass quarters: 0 north (-z), 1 east (+x), 2 south (+z), 3 west (-x).
 // A grid cell keeps this much room around the body at its centre, so no step stops with your nose on a rock (D018).
 export const GRID_CLEARANCE=1.2;
@@ -10,9 +10,12 @@ export const HEADINGS=Object.freeze([[0,-1],[1,0],[0,1],[-1,0]]);
 export const HEADING_NAMES=Object.freeze(['北','東','南','西']);
 export const headingYaw=h=>-((h%4+4)%4)*Math.PI/2;
 export function nearestHeading(yaw){return ((Math.round(-yaw/(Math.PI/2))%4)+4)%4;}
-// A turn answers at once (D019): it leaves with a gentle, already-moving start (1.2 times the average pace, so there is
-// no wind-up before the view moves) and settles softly with zero velocity, never overshooting.
-const TURN_START_SLOPE=1.2,turnEase=t=>hermite(t,TURN_START_SLOPE,0);
+// A turn moves like a head and body turning (D020): it picks up speed almost at once, with no jolt (the speed rises
+// continuously from zero, as t^0.7), peaks early and then slows down gently over the longer second part, coming to
+// rest with zero speed and zero deceleration. Speed profile t^0.7 (1-t)^2, integrated once into a lookup table.
+export const TURN_PROFILE=((()=>{const n=512,out=new Float64Array(n+1);let sum=0;const v=t=>Math.pow(t,.7)*(1-t)**2;
+ for(let k=1;k<=n;k++){sum+=(v((k-1)/n)+v(k/n))/2;out[k]=sum;}for(let k=0;k<=n;k++)out[k]/=sum;return out;})());
+const turnEase=t=>{if(t<=0)return 0;if(t>=1)return 1;const f=t*(TURN_PROFILE.length-1),k=Math.floor(f);return TURN_PROFILE[k]+(TURN_PROFILE[k+1]-TURN_PROFILE[k])*(f-k);};
 // Cubic Hermite from 0 to 1 with start/end slopes m0/m1 (in units of the whole move per duration).
 export function hermite(w,m0,m1){const w2=w*w,w3=w2*w;return (w3-2*w2+w)*m0+(-2*w3+3*w2)+(w3-w2)*m1;}
 export function hermiteSlope(w,m0,m1){return (3*w*w-4*w+1)*m0+(6*w-6*w*w)+(3*w*w-2*w)*m1;}
