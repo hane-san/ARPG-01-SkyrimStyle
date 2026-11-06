@@ -1,4 +1,4 @@
-// Original regional music for the small island (Issue #21). Thirteen short pieces, all written for this game:
+// Original regional music for the small island (Issue #21). Twenty-two short pieces, all written for this game:
 // each has its own meter, tempo, mode, instruments and melody. Oscillators only: no samples, no buffers, no CDN.
 // Melody tokens are "degree:beats" (scale degrees from the tonic, 7 = octave in seven-note modes) or "-:beats" for rests.
 const MUSIC_SCALES={major:[0,2,4,5,7,9,11],minor:[0,2,3,5,7,8,10],dorian:[0,2,3,5,7,9,10],lydian:[0,2,4,6,7,9,11],mixolydian:[0,2,4,5,7,9,10],phrygianDominant:[0,1,4,5,7,8,10]};
@@ -41,10 +41,38 @@ export const TRACKS=Object.freeze({
   melody:'4:1 -:.5 4:.5 5:1 6:1 7:2 4:2 3:1 -:.5 3:.5 4:1 5:1 6:3 -:1 4:1 5:1 6:1 7:1 8:2 7:1 6:1 5:1.5 4:.5 3:1 1:1 0:4'},
  // Sky shallows: wide space, a few glass notes and the horizon.
  shallows:{title:'空を映す浅瀬',bpm:56,meter:4,root:72,scale:'major',lead:'glass',bass:'long',pad:true,chords:[0,3,0,4,5,3,1,4],
-  melody:'7:2 -:2 9:1 7:1 4:2 -:4 6:3 -:1 4:2 -:2 3:1 4:1 6:2 -:4 2:4'}
+  melody:'7:2 -:2 9:1 7:1 4:2 -:4 6:3 -:1 4:2 -:2 3:1 4:1 6:2 -:4 2:4'},
+ // Watari: nine newly composed miniatures (eight bars; the quay has twelve shorter bars). Each phrase is written in full, with its own cadence.
+ // White quay: buoyant 2/4 harbour music, lightly syncopated, with an answering reed and walking bass.
+ watariCoast:{title:'白亜の渡り岸',bpm:102,meter:2,root:65,scale:'mixolydian',lead:'reed',bass:'walk',pad:false,arp:'pluck',drums:'x..x',chords:[0,3,6,4,0,2,3,0,5,6,3,4],
+  melody:'0:.5 2:.5 4:1 5:.5 4:.5 2:1 3:1 1:.5 0:.5 2:1.5 -:.5 4:.5 6:.5 7:1 6:1 4:1 3:.5 2:.5 1:1 0:1.5 -:.5 2:1 5:1 4:.5 3:.5 1:1 2:1 4:1 0:1.5 -:.5'},
+ // Deep trees: an uneven seven-eighth dance, low woodwind and hand-drum replies.
+ watariForest:{title:'深緑の樹海',bpm:186,meter:7,root:57,scale:'dorian',lead:'reed',bass:'pulse',pad:true,arp:'pluck',drums:'x..x.x.',chords:[0,3,6,0,2,3,6,0],
+  melody:'0:2 2:1 3:2 4:2 6:3 4:2 3:2 2:1 0:2 -1:2 0:2 3:3 2:2 -:2 4:2 6:1 7:2 9:2 7:3 6:2 4:2 3:1 4:2 2:2 1:2 0:5 -:2'},
+ // Quarry: five strong beats, open brass, tritone-coloured turns and an asymmetric drum ostinato.
+ watariRed:{title:'赤土の谷',bpm:124,meter:5,root:55,scale:'phrygianDominant',lead:'horn',bass:'pulse',pad:false,arp:'pluck',drums:'x..x.x..x.',chords:[0,1,0,6,3,1,6,0],
+  melody:'0:1 1:.5 2:.5 4:2 3:1 2:1 1:1 0:2 -:1 4:1 5:1 7:2 6:1 5:2 4:1 2:1 1:1 3:1 4:.5 5:.5 6:2 4:1 2:2 1:1 0:1 -1:1 1:1 2:1 4:1 3:2 0:4 -:1'},
+ // Flower heights: pastoral 6/8, a climbing flute over plucked strings.
+ watariFlowers:{title:'高原の花道',bpm:174,meter:6,root:67,scale:'major',lead:'flute',bass:'sway',pad:false,arp:'pluck',chords:[0,3,1,4,5,3,4,0],
+  melody:'0:2 1:1 2:2 4:1 5:3 4:2 2:1 3:2 5:1 7:2 6:1 4:3 -:3 2:2 4:1 5:2 7:1 9:3 7:2 5:1 6:2 4:1 3:2 1:1 0:4 -:2'},
+ // Canal: spare piano in three, with delayed bell strokes and unresolved lydian harmony.
+ watariCanal:{title:'霧の運河',bpm:58,meter:3,root:62,scale:'lydian',lead:'keys',bass:'waltz',pad:true,arp:'glass',bell:true,chords:[0,1,5,2,0,3,1,4],
+  melody:'2:2 -:1 4:1 6:2 5:2 3:1 1:3 4:2 7:1 6:1 5:2 2:1 1:1 3:1 0:2 -:1'},
+ // Library: a crooked five-beat music box, falling minor phrases between shelves.
+ watariLibrary:{title:'忘れられた図書庭園',bpm:90,meter:5,root:69,scale:'minor',lead:'musicbox',bass:'long',pad:true,arp:'glass',chords:[0,5,3,6,2,5,1,4],
+  melody:'7:1 6:.5 4:.5 2:2 -:1 3:1 5:1 6:1 4:2 2:1 1:1 0:2 -:1 4:1 7:1 9:1 8:2 7:2 5:1 3:1 2:1 1:1 3:.5 4:.5 6:2 5:1 4:1 2:1 1:1 -1:2 0:4 -:1'},
+ // Temple: slow, solemn triple time; sustained strings and a distant tolling bell.
+ watariTemple:{title:'黄昏の神殿',bpm:64,meter:3,root:60,scale:'minor',lead:'strings',bass:'waltz',pad:true,arp:'musicbox',bell:true,chords:[0,3,5,6,0,2,3,4],
+  melody:'0:2 2:1 4:3 5:1 3:2 2:2 -:1 7:2 6:1 4:1 2:2 3:1 1:2 0:2 -:1'},
+ // Star garden: wide glass intervals, displaced five-beat pulses and much silence.
+ watariStars:{title:'星見の庭',bpm:54,meter:5,root:72,scale:'lydian',lead:'glass',bass:'long',pad:true,arp:'musicbox',chords:[0,1,4,2,5,1,3,0],
+  melody:'0:3 -:2 6:2 7:1 4:2 9:2 -:1 6:2 3:4 -:1 7:2 5:1 2:2 4:3 -:2 1:1 3:2 6:2 0:4 -:1'},
+ // Wind cliff: broad horn phrases over a flowing compound rhythm, a distant horizon in dorian.
+ watariCliff:{title:'風の断崖',bpm:156,meter:6,root:58,scale:'dorian',lead:'horn',bass:'sway',pad:true,arp:'pluck',drums:'x..x.x',chords:[0,6,3,4,0,2,6,0],
+  melody:'0:3 4:2 6:1 7:4 6:2 4:2 3:1 2:3 1:2 0:2 -:2 4:3 6:2 9:1 7:3 6:1 4:2 3:2 4:1 2:2 1:1 0:5 -:1'}
 });
 // The quieter places keep a gentler accompaniment: arps on a music box and ticks only on the beats.
-const CALM=new Set(['shallows','snowridge','waterside','meadow']);
+const CALM=new Set(['shallows','snowridge','waterside','meadow','watariCanal','watariLibrary','watariTemple','watariStars']);
 for(const [id,track] of Object.entries(TRACKS))Object.defineProperty(track,'id',{value:id});
 export function parseMelody(text){
  return text.trim().split(/\s+/).map(token=>{const [d,len]=token.split(':');return {degree:d==='-'?null:Number(d),beats:Number(len)};});
@@ -70,7 +98,7 @@ export function trackEvents(track){
   if(track.pad)for(const midi of tones)events.push({beat:start,voice:'pad',midi,beats:meter});
   const root=degreeToMidi(track,chord,-2),fifth=degreeToMidi(track,chord+4,-2);
   // A long bass moves once inside the bar (root, then fifth), so even the calm pieces keep walking.
-  if(track.bass==='long'){const half=meter%2?meter:meter/2;events.push({beat:start,voice:'bass',midi:root,beats:half});if(half<meter)events.push({beat:start+half,voice:'bass',midi:fifth,beats:meter-half});}
+  if(track.bass==='long'){const half=meter/2;events.push({beat:start,voice:'bass',midi:root,beats:half});if(half<meter)events.push({beat:start+half,voice:'bass',midi:fifth,beats:meter-half});}
   else if(track.bass==='waltz'){events.push({beat:start,voice:'bass',midi:root,beats:1});for(let b=1;b<meter;b++)events.push({beat:start+b,voice:'pluckLow',midi:tones[b%3]+12,beats:.8});}
   else if(track.bass==='sway'){events.push({beat:start,voice:'bass',midi:root,beats:3},{beat:start+3,voice:'bass',midi:fifth,beats:3});}
   else if(track.bass==='pulse')for(let b=0;b<meter*2;b++)events.push({beat:start+b/2,voice:'bass',midi:b%4===3?fifth:root,beats:.45});
@@ -91,7 +119,7 @@ export function trackEvents(track){
 }
 
 // Instruments: a few oscillators with envelopes. Each note disconnects itself when it ends.
-const VOICE_LEVEL={keys:.05,musicbox:.04,glass:.034,flute:.045,pluck:.042,pluckLow:.025,pad:.016,bass:.05,drum:.08,tick:.03,bell:.06};
+const VOICE_LEVEL={keys:.05,musicbox:.04,glass:.034,flute:.045,pluck:.042,pluckLow:.025,pad:.016,bass:.05,drum:.08,tick:.03,bell:.06,reed:.038,strings:.028,horn:.034};
 function playVoice(ctx,out,voice,midi,time,seconds,gain=1){
  const level=(VOICE_LEVEL[voice]||.04)*gain,f=midiToHz(midi),nodes=[],oscillators=[];
  const env=ctx.createGain();env.connect(out);nodes.push(env);
@@ -103,9 +131,14 @@ function playVoice(ctx,out,voice,midi,time,seconds,gain=1){
  }else if(voice==='pad'){
   tone('triangle',f*1.0035,.6);tone('triangle',f*.9965,.6);
   const rise=Math.min(1,seconds*.4);env.gain.setValueAtTime(0,time);env.gain.linearRampToValueAtTime(level,time+rise);env.gain.setValueAtTime(level,time+seconds);env.gain.linearRampToValueAtTime(0,time+seconds+.9);end=time+seconds+1;
- }else if(voice==='flute'){
+ }else if(voice==='strings'||voice==='horn'){
+  // A filtered sustained pair: soft bowed strings or rounded brass; no sample or external asset.
+  const filter=ctx.createBiquadFilter();filter.type='lowpass';filter.frequency.value=voice==='horn'?1100:1800;filter.connect(env);nodes.push(filter);
+  tone('sawtooth',f*.998,.45,filter);tone('triangle',f*1.002,.65,filter);
+  const rise=voice==='horn'?.09:.18;env.gain.setValueAtTime(0,time);env.gain.linearRampToValueAtTime(level,time+rise);env.gain.setValueAtTime(level,time+Math.max(rise,seconds-.12));env.gain.linearRampToValueAtTime(0,time+seconds+.3);end=time+seconds+.35;
+ }else if(voice==='flute'||voice==='reed'){
   const o=tone('triangle',f),lfo=ctx.createOscillator(),depth=ctx.createGain();lfo.frequency.value=5.2;depth.gain.value=f*.006;lfo.connect(depth);depth.connect(o.frequency);nodes.push(lfo,depth);oscillators.push(lfo);
-  tone('sine',f*2,.12);
+  tone('sine',f*2,voice==='reed'?.35:.12);if(voice==='reed')tone('sine',f*3,.15);
   env.gain.setValueAtTime(0,time);env.gain.linearRampToValueAtTime(level,time+.07);env.gain.setValueAtTime(level,time+Math.max(.08,seconds-.08));env.gain.linearRampToValueAtTime(0,time+seconds+.12);end=time+seconds+.15;
  }else if(voice==='tick'){
   // A small woodblock: a high sine that drops a little and dies within a tenth of a second.
