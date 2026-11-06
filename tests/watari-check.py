@@ -1,5 +1,5 @@
 """Bridge and folded island acceptance against production WebGL/collision; no shipped QA access."""
-import atexit,json,math,os,subprocess,time
+import atexit,hashlib,json,math,os,subprocess,time
 from pathlib import Path
 from playwright.sync_api import sync_playwright
 
@@ -14,6 +14,7 @@ const watariQARegions=(await import('./regions.js'+new URL(import.meta.url).sear
 window._watariQA={
  data:watariQAData,regions:watariQARegions,
  objects(){return obstacles.filter(o=>o.kind?.startsWith('watari')).reduce((a,o)=>(a[o.kind]=(a[o.kind]||0)+1,a),{});},
+ oldLayout(){return {obs:obstacles.filter(o=>!o.kind.startsWith('watari')&&o.kind!=='bridge-rail'),npcs:npcs.map(n=>({x:n.x,z:n.z}))};},
  go(x,z,h=0){
   keys.clear();pendingCommands.length=0;keyOrder.length=0;
   if(walker){walker.action=null;walker.cooldown=0;walker.rest=0;walker.carry=null;[walker.i,walker.j]=walker.cellOf(x,z);[walker.x,walker.z]=walker.center(walker.i,walker.j);walker.heading=h;walker.yaw=-h*Math.PI/2;walker.y=walker.eyeHeight(walker.x,walker.z);walker.groundTarget=undefined;walker.groundRate=0;player.x=walker.x;player.z=walker.z;player.y=walker.y;player.yaw=walker.yaw;}
@@ -66,12 +67,22 @@ def install(page):
 
 def close(a,b,tolerance=.01):return all(abs(x-y)<tolerance for x,y in zip(a,b))
 
+def layout_digest(objects):
+ return hashlib.sha256('\n'.join(sorted(json.dumps(o,sort_keys=True,separators=(',',':')) for o in objects)).encode()).hexdigest()
+
+def original_layout(page,grid):
+ # Main dfa8433 snapshots: adding an island must not move any existing prop or inhabitant.
+ expected=('b1f70ce24b2622cbe1cbb37a1e147bf03ab6575e412e19c0e835c87c273cffc6','af40e35b46526ae1f8ccfa156776451228cb32377e3cfc7600627ed5998416a4') if grid else ('f41a7a1f25b841f02ef097829011886f3a2789de694f3a0e0237af9792cf82f3','caa0747ad62a386278bca96ad6e0648549575011e4d76d66f944849bd96881c4')
+ old=page.evaluate('_watariQA.oldLayout()');actual=(layout_digest(old['obs']),layout_digest(old['npcs']))
+ assert actual==expected,('original layout changed',grid,actual,expected)
+
 with sync_playwright() as pw:
  browser=pw.chromium.launch(executable_path=os.environ.get('CHROMIUM_PATH','/usr/bin/chromium'),headless=True,args=['--no-sandbox','--use-angle=swiftshader','--enable-unsafe-swiftshader'])
  context=browser.new_context(viewport={'width':390,'height':844},is_mobile=True,has_touch=True)
  page=context.new_page();page.set_default_timeout(60000);errors=[];page.on('pageerror',lambda e:errors.append(str(e)));install(page)
  page.goto(f'http://127.0.0.1:{port}/',wait_until='networkidle');page.wait_for_function('!!window._watariQA');page.locator('#begin').tap();page.wait_for_function("getComputedStyle(document.querySelector('#arrival')).visibility==='hidden'")
  assert page.evaluate('nagi.grid.cell')==7.5
+ original_layout(page,True)
  graph=page.evaluate('_watariQA.graph()')
  assert graph['bad']==[],graph['bad']
  assert graph['bridgePath'] and all(t['path'] for t in graph['targets']),graph['targets']
@@ -99,7 +110,7 @@ with sync_playwright() as pw:
  position=page.evaluate('nagi.position');turns=page.evaluate('nagi.grid.turns');page.keyboard.press('e');page.wait_for_function(f'nagi.grid.turns>{turns}&&!nagi.grid.busy');assert page.evaluate('nagi.position.x')==position['x'] and page.evaluate('nagi.position.z')==position['z']
  # Each region has a distinctive actual track and environment, and the home sky returns after the bridge.
  skies=[];views=[]
- headings={'watariForest':3,'watariFlowers':.5,'watariCanal':2,'watariLibrary':1.5,'watariTemple':1,'watariCliff':.5}
+ headings={'watariForest':3,'watariRed':1,'watariFlowers':.5,'watariCanal':2,'watariLibrary':1.5,'watariTemple':1,'watariCliff':.5}
  for region in page.evaluate('_watariQA.regions'):
   page.evaluate('([x,z])=>_watariQA.go(x,z)',[region['x'],region['z']]);state=page.evaluate('_watariQA.environment()')
   assert state['region']==state['track']==region['id'],(region,state)
@@ -122,6 +133,7 @@ with sync_playwright() as pw:
  free=browser.new_page(viewport={'width':390,'height':844});free.set_default_timeout(60000);free.on('pageerror',lambda e:errors.append(str(e)));install(free)
  free.goto(f'http://127.0.0.1:{port}/?grid=0',wait_until='networkidle');free.wait_for_function('!!window._watariQA');free.locator('#begin').click();free.wait_for_function("getComputedStyle(document.querySelector('#arrival')).visibility==='hidden'")
  assert free.evaluate('nagi.grid') is None
+ original_layout(free,False)
  free.evaluate('_watariQA.go(30.5,15,1)');assert free.evaluate('_watariQA.bridgeEdges()')==[]
  continuous=free.evaluate('_watariQA.freeWalk([[113,15],[30.5,15]])');assert abs(continuous['x']-30.5)<.25 and abs(continuous['z']-15)<.25,continuous
  free.evaluate('_watariQA.go(8,30)');state=free.evaluate('_watariQA.environment()');assert state['region']==state['track']=='shore',state
