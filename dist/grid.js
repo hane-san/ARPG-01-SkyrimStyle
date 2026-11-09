@@ -198,7 +198,7 @@ export function keyCommand(code){return KEY_COMMANDS[code]||null;}
 // - Walking forward and then sliding sideways in the same touch looks too.
 // - Side-steps are not gestures: the page's two faint corner buttons do them.
 // A flick that lands while a step is still playing is kept and acted on next. A short still tap is one step forward.
-export const SWIPE_DISTANCE=22,TAP_DISTANCE=10,HOLD_SECONDS=.12,TAP_SECONDS=HOLD_SECONDS,LOOK_PIXELS_PER_QUARTER=150,LOOK_LIMIT_QUARTERS=.5;
+export const SWIPE_DISTANCE=22,TAP_DISTANCE=10,HOLD_SECONDS=.12,TAP_SECONDS=HOLD_SECONDS,LOOK_PIXELS_PER_QUARTER=220,LOOK_LIMIT_QUARTERS=.5;
 const FLICK={up:'forward',down:'back',left:'turnLeft',right:'turnRight'},HELD={up:'forward',down:'back',left:'look',right:'look'};
 export function swipeDirection(dx,dy){
  if(Math.hypot(dx,dy)<SWIPE_DISTANCE)return null;
