@@ -52,7 +52,13 @@ def expect_step(page,key):
  i,j=cell(page);h=page.evaluate('nagi.grid.heading');dx,dz=HEADINGS[(h+OFFSET[key])%4]
  open_=page.evaluate('([a,b,c,d])=>_gridQA.canStep(a,b,c,d)',[i,j,i+dx,j+dz])
  steps,bumps,feet=page.evaluate('[nagi.grid.steps,nagi.grid.bumps,nagi.footsteps]')
- page.keyboard.press(key);settle(page)
+ page.keyboard.press(key)
+ # Wait for the press to start its step or bump before settling: on a slow, loaded renderer no frame may run for half a
+ # second, and settle() would then see a still, idle walker before the press was even handled. The outcome is then
+ # asserted exactly as before.
+ try:page.wait_for_function(f'nagi.grid.steps+nagi.grid.bumps>{steps+bumps}',timeout=15000)
+ except Exception:pass
+ settle(page)
  state=lambda:{'key':key,'open':open_,'from':(i,j),'cell':cell(page),'steps':(steps,page.evaluate('nagi.grid.steps')),'bumps':(bumps,page.evaluate('nagi.grid.bumps')),'feet':(feet,page.evaluate('nagi.footsteps')),'audio':page.evaluate('nagi.audioState'),'grid':page.evaluate('nagi.grid')}
  if open_:assert cell(page)==(i+dx,j+dz) and page.evaluate('nagi.grid.steps')==steps+1 and page.evaluate('nagi.footsteps')==feet+1,state()
  else:assert cell(page)==(i,j) and page.evaluate('nagi.grid.bumps')==bumps+1 and page.evaluate('nagi.footsteps')==feet,state()
