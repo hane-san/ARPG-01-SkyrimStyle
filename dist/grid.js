@@ -28,8 +28,8 @@ export const ONE_SHOT=Object.freeze(new Set(['back','turnLeft','turnRight','turn
 const MOVE_OFFSET={forward:0,strafeRight:1,back:2,strafeLeft:3};
 
 export class GridWalker {
- constructor(world,{origin=GRID_ORIGIN,cell=CELL,i=0,j=0,heading=0,clearance=0,exempt=null}={}){
-  this.world=world;this.clearance=clearance;this.exempt=exempt;this.origin=origin;this.cell=cell;this.i=i;this.j=j;this.heading=(heading%4+4)%4;
+ constructor(world,{origin=GRID_ORIGIN,cell=CELL,i=0,j=0,heading=0,clearance=0,exempt=null,barrier=null}={}){
+  this.world=world;this.clearance=clearance;this.exempt=exempt;this.barrier=barrier;this.origin=origin;this.cell=cell;this.i=i;this.j=j;this.heading=(heading%4+4)%4;
   const [x,z]=this.center(i,j);this.x=x;this.z=z;this.y=this.eyeHeight(x,z);this.yaw=headingYaw(this.heading);
   this.action=null;this.cooldown=0;this.rest=0;this.steps=0;this.turns=0;this.bumps=0;this.travelled=0;this.speed=0;this.carry=null;
   this.edges=new Map();this.visited=new Set([this.key(i,j)]);
@@ -48,6 +48,9 @@ export class GridWalker {
  // A step is legal only when the swept body reaches the next centre exactly: no water, no props, no sliding, and the
 // centre keeps `clearance` metres of room around the body (GRID_CLEARANCE in the game).
  canStep(i,j,ni,nj){
+  // An area border or a maze hedge (D025) blocks the edge whatever the ground; it is checked outside the cache because gates
+  // are planned after the ground is known.
+  if(this.barrier&&this.barrier(i,j,ni,nj))return false;
   const id=i+','+j+'>'+ni+','+nj;let ok=this.edges.get(id);
   if(ok===undefined){
    const [ax,az]=this.center(i,j),[bx,bz]=this.center(ni,nj);
@@ -198,7 +201,7 @@ export function keyCommand(code){return KEY_COMMANDS[code]||null;}
 // - Walking forward and then sliding sideways in the same touch looks too.
 // - Side-steps are not gestures: the page's two faint corner buttons do them.
 // A flick that lands while a step is still playing is kept and acted on next. A short still tap is one step forward.
-export const SWIPE_DISTANCE=22,TAP_DISTANCE=10,HOLD_SECONDS=.12,TAP_SECONDS=HOLD_SECONDS,LOOK_PIXELS_PER_QUARTER=220,LOOK_LIMIT_QUARTERS=.5;
+export const SWIPE_DISTANCE=22,TAP_DISTANCE=10,HOLD_SECONDS=.12,TAP_SECONDS=HOLD_SECONDS,LOOK_PIXELS_PER_QUARTER=340,LOOK_LIMIT_QUARTERS=.5;
 const FLICK={up:'forward',down:'back',left:'turnLeft',right:'turnRight'},HELD={up:'forward',down:'back',left:'look',right:'look'};
 export function swipeDirection(dx,dy){
  if(Math.hypot(dx,dy)<SWIPE_DISTANCE)return null;
@@ -268,6 +271,45 @@ export class GridGesture {
   const tap=!this.lookOnly&&!this.moved&&!this.command&&now-this.started<TAP_SECONDS,unacted=this.command&&this.command!=='look'&&!this.acted?this.command:null;
   this.clearOwner();return tap?'tap':unacted||true;
  }
+}
+
+// Areas (D025): the world is laid out in districts of AREA_SIZE x AREA_SIZE cells, as a dungeon is laid out in floors.
+// Area (0,0) is the first island: cells i -10..9, j -19..0 (the landing (0,0) sits in its southern row).
+export const AREA_SIZE=20,AREA_ORIGIN=Object.freeze([-10,-19]);
+export const areaOf=(i,j)=>[Math.floor((i-AREA_ORIGIN[0])/AREA_SIZE),Math.floor((j-AREA_ORIGIN[1])/AREA_SIZE)];
+export const areaKey=(i,j)=>{const [a,b]=areaOf(i,j);return a+','+b;};
+export const areaStart=(ai,aj)=>[AREA_ORIGIN[0]+ai*AREA_SIZE,AREA_ORIGIN[1]+aj*AREA_SIZE];
+export const edgeKey=(i,j,ni,nj)=>i+','+j+'>'+ni+','+nj;
+// Gates through area borders. Borders are closed except at gates; the planner opens as few as keep everything reachable:
+// starting from `start`, it walks every open edge (canStep), and whenever the reachable ground can grow only across a border
+// (crosses), it opens the best such edge (lowest score) and carries on. Every cell reachable without borders stays
+// reachable; `initial` gates (where roads cross) are open from the start.
+export function planGates(start,canStep,crosses,score,initial=[]){
+ const gates=new Set(),open=(i,j,ni,nj)=>{gates.add(edgeKey(i,j,ni,nj));gates.add(edgeKey(ni,nj,i,j));};
+ for(const e of initial)open(...e);
+ const seen=new Set([start.join(',')]),queue=[start],candidates=[];
+ const visit=()=>{while(queue.length){const [i,j]=queue.pop();for(const [dx,dz] of HEADINGS){const ni=i+dx,nj=j+dz,k=ni+','+nj;if(seen.has(k)||!canStep(i,j,ni,nj))continue;if(crosses(i,j,ni,nj)&&!gates.has(edgeKey(i,j,ni,nj))){candidates.push([i,j,ni,nj]);continue;}seen.add(k);queue.push([ni,nj]);}}};
+ visit();
+ for(;;){
+  let best=null,low=Infinity;
+  for(const c of candidates){if(seen.has(c[2]+','+c[3]))continue;const v=score(...c);if(v<low){low=v;best=c;}}
+  if(!best)break;
+  open(...best);seen.add(best[2]+','+best[3]);queue.push([best[2],best[3]]);visit();
+ }
+ return {gates,seen};
+}
+// A perfect maze (one path between any two cells) over a w x h block, carved by a seeded depth-first walk. Returns the
+// set of internal walls as edge keys between block cells, given the block's first cell (i0,j0).
+export function carveMaze(i0,j0,w,h,seed=1){
+ let s=seed>>>0||1;const rnd=n=>{s=(1664525*s+1013904223)>>>0;return s%n;};
+ const walls=new Set(),seen=new Set(['0,0']),stack=[[0,0]];
+ for(let a=0;a<w;a++)for(let b=0;b<h;b++){if(a+1<w){walls.add(edgeKey(i0+a,j0+b,i0+a+1,j0+b));walls.add(edgeKey(i0+a+1,j0+b,i0+a,j0+b));}if(b+1<h){walls.add(edgeKey(i0+a,j0+b,i0+a,j0+b+1));walls.add(edgeKey(i0+a,j0+b+1,i0+a,j0+b));}}
+ while(stack.length){
+  const [a,b]=stack[stack.length-1],next=HEADINGS.map(([dx,dz])=>[a+dx,b+dz]).filter(([x,y])=>x>=0&&y>=0&&x<w&&y<h&&!seen.has(x+','+y));
+  if(!next.length){stack.pop();continue;}
+  const [x,y]=next[rnd(next.length)];walls.delete(edgeKey(i0+a,j0+b,i0+x,j0+y));walls.delete(edgeKey(i0+x,j0+y,i0+a,j0+b));seen.add(x+','+y);stack.push([x,y]);
+ }
+ return walls;
 }
 
 // Automap: visited cells around the walker, drawn by the page. Pure data for testing.

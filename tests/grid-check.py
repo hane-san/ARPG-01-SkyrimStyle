@@ -19,6 +19,16 @@ window._gridQA={
   return null;
  },
  roads(){const bad=[];for(const points of routes){const c=gridCells(points,GRID_ORIGIN,CELL,walkable);for(let k=1;k<c.length;k++){const [a,b]=[c[k-1],c[k]];if(!walker.canStep(a[0],a[1],b[0],b[1])||!walker.canStep(b[0],b[1],a[0],a[1]))bad.push([a,b]);}}return bad;},
+ areas(){
+  // D025: districts, gates and the maze, from the production data.
+  const clash=[...areaRegions.entries()].filter(([k,r])=>{const [a,b]=k.split(',').map(Number);return [[a+1,b],[a-1,b],[a,b+1],[a,b-1]].some(([x,y])=>areaRegions.get(x+','+y)?.track===r.track);}).map(([k])=>k);
+  let leaks=0,gatesUsed=0;
+  for(let j=-60;j<=4;j++)for(let i=-60;i<=60;i++)for(const [dx,dz] of [[1,0],[0,1]]){const ni=i+dx,nj=j+dz;if(!crossesArea(i,j,ni,nj))continue;if(walker.canStep(i,j,ni,nj)){if(areaGates.has(edgeKey(i,j,ni,nj)))gatesUsed++;else leaks++;}}
+  let mazeCells=0,mazeOpen=0;
+  if(maze){const {i0,j0}=maze,seen=new Set([i0+','+j0]),q=[[i0,j0]];while(q.length){const [i,j]=q.pop();for(const [dx,dz] of [[1,0],[-1,0],[0,1],[0,-1]]){const ni=i+dx,nj=j+dz;if(ni<i0||nj<j0||ni>=i0+7||nj>=j0+7||seen.has(ni+','+nj)||!walker.canStep(i,j,ni,nj))continue;seen.add(ni+','+nj);q.push([ni,nj]);}}mazeCells=seen.size;
+   for(let a=0;a<7;a++)for(let b=0;b<7;b++){if(a<6&&walker.canStep(i0+a,j0+b,i0+a+1,j0+b))mazeOpen++;if(b<6&&walker.canStep(i0+a,j0+b,i0+a,j0+b+1))mazeOpen++;}}
+  return {districts:areaRegions.size,clash,leaks,gatesUsed,gates:areaGates.size/2,maze,mazeCells,mazeOpen,first:areaRegions.get('0,0')?.id};
+ },
  reach(){
   const seen=new Set(['0,0']),queue=[[0,0]];
   while(queue.length){const [i,j]=queue.pop();for(const [dx,dz] of [[0,-1],[1,0],[0,1],[-1,0]]){const k=(i+dx)+','+(j+dz);if(!seen.has(k)&&walker.canStep(i,j,i+dx,j+dz)){seen.add(k);queue.push([i+dx,j+dz]);}}}
@@ -140,14 +150,16 @@ with sync_playwright() as pw:
  page.keyboard.press('h');page.wait_for_timeout(200);assert 'カニ歩き' in page.locator('.book-controls').inner_text()
  page.keyboard.press('Escape');page.wait_for_timeout(200)
  page.screenshot(path=str(root/'grid-desktop.png'))
- # Regions (Issue #21): the glass house brings its own music and sky; the shore returns to the home theme.
+ # D025: each 20 x 20 district has its own piece and sky; the first island is district 1 and keeps the shore. Borders
+ # are closed hedges except at gates, no two neighbouring districts share a piece, and the hedge maze is a perfect maze.
+ areas=page.evaluate('_gridQA.areas()')
+ assert areas['first']=='shore' and areas['districts']>=20 and areas['clash']==[] and areas['leaks']==0 and areas['gates']>=10,areas
+ assert areas['maze'] and areas['mazeCells']==49 and areas['mazeOpen']==48,areas
  page.evaluate('_gridQA.go(0,0)');page.wait_for_function("nagi.region==='shore' && nagi.musicTrack==='shore'",timeout=20000)
  base_sky=page.evaluate('nagi.skyHorizon')
- C=7.5;page.evaluate('([i,j])=>_gridQA.go(i,j)',[round((-22-8)/C),round((11-30)/C)])
- page.wait_for_function("nagi.region==='greenhouse' && nagi.musicTrack==='greenhouse'",timeout=20000)
+ page.evaluate('_gridQA.go(0,-21,0)');page.wait_for_function("nagi.region.startsWith('area:') && nagi.musicTrack && nagi.musicTrack!=='shore'",timeout=20000)
+ assert page.evaluate('nagi.grid.areaNumber')>=2
  page.wait_for_timeout(2500);assert page.evaluate('nagi.skyHorizon')!=base_sky
- for region,(i,j) in {name:(round((x-8)/C),round((z-30)/C)) for name,(x,z) in {'snowridge':(6,-98),'meadow':(-12,-79),'windgate':(-8,-29)}.items()}.items():
-  page.evaluate(f'_gridQA.go({i},{j})');page.wait_for_function(f"nagi.region==='{region}' && nagi.musicTrack==='{region}'",timeout=20000)
  page.evaluate('_gridQA.go(0,0)');page.wait_for_function("nagi.region==='shore' && nagi.musicTrack==='shore'",timeout=20000)
  assert page.evaluate('nagi.audioState')=='running'
  page.close()
@@ -217,7 +229,7 @@ with sync_playwright() as pw:
  turns,clicks,before=grid('turns'),grid('holdClicks'),actions()
  t=time.time();touch('touchStart',100,700,t);mobile.wait_for_function(f'nagi.grid.holdClicks>{clicks}',timeout=15000)
  touch('touchMove',100+30,702,t+.3);touch('touchMove',100+30+250,702,t+.4)
- mobile.wait_for_function('nagi.grid.look<-.75',timeout=15000);mobile.wait_for_timeout(300)
+ mobile.wait_for_function('nagi.grid.look<-.68',timeout=15000);mobile.wait_for_timeout(300)
  assert grid('look')>-math.pi/4 and grid('heading')==heading and grid('turns')==turns and grid('holdClicks')==clicks+1
  touch('touchMove',100+30+250,620,t+.6);mobile.wait_for_timeout(1200)
  assert actions()==before and grid('heading')==heading
@@ -273,7 +285,7 @@ with sync_playwright() as pw:
  assert all(boxes.values()),boxes
  xs=[boxes[k]['x'] for k in ['#side-left','#open-book','#step-back','#automap','#side-right']];assert xs==sorted(xs),boxes
  for k,b in boxes.items():assert b['y']>844*.8 and b['y']+b['height']<=844,(k,b)
- assert 80<=boxes['#automap']['width']<=110 and boxes['#automap']['x']+boxes['#automap']['width']>390*.6,boxes['#automap']
+ assert 100<=boxes['#automap']['width']<=124 and boxes['#automap']['x']+boxes['#automap']['width']>390*.6,boxes['#automap']
  assert boxes['#open-book']['x']<390*.4 and 'メニュー' in mobile.locator('#open-book').inner_text()
  overlaps=lambda a,b:min(a['x']+a['width'],b['x']+b['width'])-max(a['x'],b['x'])>0 and min(a['y']+a['height'],b['y']+b['height'])-max(a['y'],b['y'])>0
  names=list(boxes);assert not [(a,b) for i,a in enumerate(names) for b in names[i+1:] if overlaps(boxes[a],boxes[b])],boxes
@@ -287,6 +299,10 @@ with sync_playwright() as pw:
  before_compass,turns_before=grid('compass'),grid('turns')
  t=time.time();touch('touchStart',195,700,t);touch('touchMove',260,705,t+.08);touch('touchEnd',at=t+.12);mobile.wait_for_function(f'nagi.grid.turns>{turns_before}',timeout=15000);settle(mobile)
  assert abs(abs(grid('compass')-before_compass)-90)<1 or abs(abs(grid('compass')-before_compass)-270)<1,(before_compass,grid('compass'))
+ # D025: the map shows the whole district by default; a tap switches to the close view and back, and never moves you.
+ assert grid('map')=='area'
+ before=actions();mobile.locator('#automap').tap();mobile.wait_for_function("nagi.grid.map==='near'",timeout=5000)
+ mobile.locator('#automap').tap();mobile.wait_for_function("nagi.grid.map==='area'",timeout=5000);mobile.wait_for_timeout(400);assert actions()==before
  # The v button steps back one cell, facing unchanged.
  heading,turns,before=grid('heading'),grid('turns'),actions()
  press('#step-back',0);mobile.wait_for_function(f'nagi.grid.steps+nagi.grid.bumps>{before}',timeout=15000);settle(mobile)
