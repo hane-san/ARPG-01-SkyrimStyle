@@ -118,7 +118,8 @@ button:focus-visible{outline:2px solid #385e4b;outline-offset:4px}
 /* Touch layout in grid mode (D023): a compact bar along the bottom edge, < メニュー … 🗺 >, with a step-back v in the
    middle. The map and the menu move down from the top, so the sky and the captions are left clear. */
 .grid-mode.touch-ui .side-step{width:44px;height:64px;border-radius:22px;bottom:calc(var(--safe-bottom) + 12px)}
-.grid-mode.touch-ui #step-back{left:calc(50% - 42px);width:52px;height:44px;margin-left:0;bottom:calc(var(--safe-bottom) + 8px)}
+/* The menu has a fixed width and v sits just after it, so the bar never depends on how wide a font draws メニュー. */
+.grid-mode.touch-ui #step-back{left:calc(max(3vw,var(--safe-left)) + 134px);width:52px;height:44px;margin-left:0;bottom:calc(var(--safe-bottom) + 8px)}
 @media(max-width:360px){
  .grid-mode.touch-ui #open-book span{display:none}
  .grid-mode.touch-ui #automap{width:96px;height:96px}
@@ -159,3 +160,6 @@ button:focus-visible{outline:2px solid #385e4b;outline-offset:4px}
 .grid-mode.playing #compass{display:block}
 .grid-mode.touch-ui #compass{right:max(4vw,var(--safe-right));top:calc(var(--safe-top) + 20px)}
 .reading #compass{opacity:0}
+
+.grid-mode.touch-ui #open-book{width:76px;min-width:0;justify-content:center;letter-spacing:.04em;overflow:hidden;white-space:nowrap}
+@media(max-width:360px){.grid-mode.touch-ui #open-book{width:44px}}
