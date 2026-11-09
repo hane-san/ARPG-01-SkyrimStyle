@@ -64,9 +64,14 @@ test('keys and slides map to the same six commands',()=>{
  assert.equal(swipeCommand(-40,10),'turnLeft');assert.equal(swipeCommand(40,-10),'turnRight');assert.equal(swipeCommand(40,-10,true),'look');
 });
 
-test('gesture: lower half only, tap is one step, multitouch and release clear input',()=>{
+test('gesture: moves in the lower half, glances anywhere; tap is one step, multitouch and release clear input',()=>{
  const g=new GridGesture(),b={top:0,height:800},touch=(id,x,y,extra={})=>({pointerId:id,pointerType:'touch',clientX:x,clientY:y,button:0,buttons:1,isPrimary:true,...extra});
- assert.equal(g.begin(touch(1,100,200),b,0),false);g.end(touch(1,100,200),0);
+ // D022: the upper half only glances. A flick or a tap there does nothing; a press-in there glances and zooms.
+ assert.equal(g.begin(touch(1,100,200),b,0),true);g.move(touch(1,100,140),.05);assert.equal(g.command,null);assert.equal(g.available(),null);assert.equal(g.end(touch(1,100,140),.1),true);
+ g.begin(touch(11,100,200),b,0);g.move(touch(11,160,200),.05);assert.equal(g.available(),null);assert.equal(g.end(touch(11,160,200),.1),true);
+ g.begin(touch(12,100,200),b,0);assert.equal(g.end(touch(12,100,200),.05),true,'no tap step from the upper half');
+ g.begin(touch(13,100,200),b,0);assert.equal(g.arm(HOLD_SECONDS+.01,.1),true);assert.equal(g.glancing,true);assert.ok(g.look>0);
+ g.move(touch(13,160,202),HOLD_SECONDS+.1);assert.equal(g.command,'look');g.move(touch(13,160,140),HOLD_SECONDS+.2);assert.equal(g.available(),null);assert.equal(g.end(touch(13,160,140),1),true);
  assert.equal(g.begin(touch(2,100,600),b,0),true);assert.equal(g.end(touch(2,101,601),.1),'tap');
  assert.equal(g.begin(touch(3,100,600),b,0),true);g.move(touch(3,100,560),.05);assert.equal(g.command,'forward');
  g.move(touch(3,160,565),.1);assert.equal(g.command,'turnRight');
@@ -291,4 +296,20 @@ test('a press-in at once glances toward the pressed spot; holding on and sliding
  g.move(touch(2,100,540),HOLD_SECONDS+.1);assert.equal(g.available(),'forward');assert.equal(g.glancing,false);assert.equal(g.look,0);g.end(touch(2,100,540),1);
  // A quick flick never glances, even if a slow frame clicked first: the turn takes over.
  g.begin(touch(3,200,600),b,0);g.arm(1,.05);g.move(touch(3,260,600),.05);assert.equal(g.available(),'turnRight');assert.equal(g.glancing,false);g.end(touch(3,260,600),.1);
+});
+
+test('a turn is unhurried but answers at once, and a second turn asked for near its end chains straight on',()=>{
+ assert.ok(TURN_SECONDS>=.65&&TURN_SECONDS<=.8);
+ const w=new GridWalker(flat(),{origin:[0,0]}),dt=1/60;assert.equal(w.command('turnRight'),'turn');
+ // Half-way within a quarter second (as quick to answer as before); the rest is a slow, soft settle.
+ let t=0;while(-w.yaw<Math.PI/4){w.update(dt);t+=dt;}assert.ok(t<.27,t);
+ // Too early for the next turn: it is refused (the page keeps it queued).
+ assert.equal(w.command('turnRight',{chain:true}),null);
+ while(w.action.t<w.action.duration*.85)w.update(dt);
+ // Near the end it chains on from where the view is: no jump, and it lands on the heading after next.
+ const before=w.yaw;assert.equal(w.command('turnRight',{chain:true}),'turn');assert.equal(w.yaw,before);assert.equal(w.heading,2);
+ let prev=w.yaw,jump=0;while(w.action){w.update(dt);jump=Math.max(jump,Math.abs(w.yaw-prev));prev=w.yaw;}
+ assert.ok(jump<.12,jump);assert.ok(Math.abs(w.yaw+Math.PI)<1e-12,w.yaw);
+ // Without chain (a held key), the next quarter still waits for the landing and the pause.
+ const k=new GridWalker(flat(),{origin:[0,0]});k.command('turnLeft');while(k.action.t<k.action.duration*.9)k.update(dt);assert.equal(k.command('turnLeft'),null);
 });
