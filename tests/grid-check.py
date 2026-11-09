@@ -185,6 +185,12 @@ with sync_playwright() as pw:
   if at is not None:event['timestamp']=at
   cdp.send('Input.dispatchTouchEvent',event)
  actions=lambda:mobile.evaluate('nagi.grid.steps+nagi.grid.bumps')
+ # A tap that should act: wait for its step or bump to begin before settling, since a slow renderer may run no frame for a
+ # while and settle() would otherwise see an idle walker before the tap was handled. The outcome is asserted as before.
+ def acted(before):
+  try:mobile.wait_for_function(f'nagi.grid.steps+nagi.grid.bumps>{before}',timeout=15000)
+  except Exception:pass
+  settle(mobile)
  touch('touchStart',195,250);touch('touchMove',195,150);mobile.wait_for_timeout(500);touch('touchEnd');mobile.wait_for_timeout(300)
  assert actions()==0
  # D022: the upper half never walks or turns, but a press-in there glances and zooms just like below.
@@ -195,7 +201,7 @@ with sync_playwright() as pw:
  touch('touchMove',360,252);mobile.wait_for_function('nagi.grid.look<-.2',timeout=15000);touch('touchMove',360,150);mobile.wait_for_timeout(500)
  assert actions()==0 and mobile.evaluate('nagi.grid.turns')==0
  touch('touchEnd');mobile.wait_for_function('Math.abs(nagi.grid.look)<.01 && nagi.fov===68',timeout=15000)
- t=time.time();touch('touchStart',195,700,t);touch('touchEnd',at=t+.06);settle(mobile);assert actions()==1,mobile.evaluate('nagi.grid')
+ t=time.time();touch('touchStart',195,700,t);touch('touchEnd',at=t+.06);acted(0);assert actions()==1,mobile.evaluate('nagi.grid')
  # A press held longer than the tap window is not a step.
  t=time.time();touch('touchStart',195,700,t);touch('touchEnd',at=t+.6);settle(mobile);assert actions()==1
  touch('touchStart',195,700);touch('touchMove',195,640);mobile.wait_for_function('nagi.grid.steps+nagi.grid.bumps>=2',timeout=15000);mobile.wait_for_timeout(800);touch('touchEnd');settle(mobile)
@@ -277,7 +283,7 @@ with sync_playwright() as pw:
  # A quick tap is judged on its own event times: it steps once and never looks, turns or strolls, even when a slow
  # software-rendered frame lets the wall-clock click sound before the release arrives (the click is only a cue).
  heading,turns,before=grid('heading'),grid('turns'),actions()
- t=time.time();touch('touchStart',195,700,t);touch('touchEnd',at=t+.06);settle(mobile)
+ t=time.time();touch('touchStart',195,700,t);touch('touchEnd',at=t+.06);acted(before)
  assert actions()==before+1 and grid('heading')==heading and grid('turns')==turns and abs(grid('look'))<.01
  # D023: on a touch screen the bottom bar reads < メニュー … map > with a step-back v in the middle; nothing overlaps,
  # all stay in the bottom fifth, the map is a little smaller, and the greeting sits high, clear of all of them.
