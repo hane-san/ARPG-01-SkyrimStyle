@@ -174,6 +174,9 @@ with sync_playwright() as pw:
  # Held press (one click), then a short slide right: the view follows the finger, the heading stays; letting go settles.
  clicks=grid('holdClicks')
  t=time.time();touch('touchStart',150,700,t);mobile.wait_for_function(f'nagi.grid.holdClicks>{clicks}',timeout=15000)
+ # D021: the click alone already zooms in a little and leans the view toward the pressed spot (left of centre here).
+ mobile.wait_for_function('nagi.fov<62 && nagi.grid.look>.03',timeout=15000)
+ assert grid('heading')==heading and grid('turns')==turns+2
  touch('touchMove',150+30,702,t+.3);touch('touchMove',150+90,702,t+.35)
  mobile.wait_for_function('nagi.grid.look<-.3',timeout=15000)
  # The glance leans a little into the distance (D020), and the plain view returns when the finger lifts.

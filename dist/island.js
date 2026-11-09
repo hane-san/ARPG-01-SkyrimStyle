@@ -870,10 +870,12 @@ function heldCommand(){
 let lookYaw=0,activeCommand=null,bumpedCommand=null,bumpedAt=null;
 function gridUpdate(dt){
  // A still press arms the held mode: a soft click (and a tap of vibration where supported) says so.
- if(gridGesture.arm(performance.now()/1000))holdClick();
- // Looking around (D016/D017): the view follows the finger, easing into 45 degrees either way, and only the view: the
- // heading never changes by looking; a flick turns. Letting go settles the view gently back on the heading.
- const looking=gridGesture.command==='look';
+ // The click also leans the view toward the spot under the finger (D021): its angle from the screen's centre line.
+ if(gridGesture.held&&!gridGesture.armed){const r=canvas.getBoundingClientRect(),u=(gridGesture.x-r.left)/Math.max(1,r.width)*2-1,aim=Math.atan(u*Math.tan(viewFov*Math.PI/360)*r.width/Math.max(1,r.height))/(Math.PI/2);if(gridGesture.arm(performance.now()/1000,aim))holdClick();}
+ // Looking around (D016/D017/D021): from the press-in click the view leans toward the pressed spot and zooms in a little;
+ // sliding sideways moves the eyes from there, easing into 45 degrees either way, and only the eyes: the heading never
+ // changes by looking; a flick turns. Letting go settles the view gently back on the heading.
+ const looking=gridGesture.glancing;
  lookYaw+=(-gridGesture.look*Math.PI/2-lookYaw)*(1-Math.exp(-dt*(looking?12:6)));
  // Settled means settled: the easing would otherwise creep toward zero forever.
  if(!looking&&Math.abs(lookYaw)<1e-4)lookYaw=0;
@@ -1155,10 +1157,10 @@ function drawAutomap(){
 }
 if(GRID_MODE){
  document.body.classList.add('grid-mode');
- canvas.setAttribute('aria-label',canvas.getAttribute('aria-label').split('。')[0]+'。マス目を一つずつ歩きます。W/Sで一マス前後、A/Dで横へ一マス、Q/Eまたは左右矢印で90度向きを変え、Xで振り返ります。画面下半分では、上へはじくと一歩前へ（押したままで一歩ずつ進み続ける）、下へはじくと一歩後ろへ、左右へはじくとすぐに90度向きを変えます。一度押し込んで音がしてから左右へ滑らせると、少し遠くへ寄りながら見渡すだけで（左右45度ほどまで）、向きは変わりません。カニ歩きは画面下の左右の隅にある薄いボタンで。軽く触れると一マス進みます。');
- const notes=document.querySelector('.notes p');if(notes)notes.innerHTML='マス目をひとつずつ歩く。下半分で<b>はじく</b>：上で一歩前へ（押したままで一歩ずつ進み続ける）、下で一歩後ろ、<b>左右ですぐに向きを変える</b>。<br><b>一度押し込んで「カチッ」→ 左右へ滑らせる</b>と、少し遠くへ寄って見渡すだけ（左右45度ほどまで、離すと正面へ）。<br>カニ歩きは左右の隅の薄いボタン。軽く触れると一マス。PCは W A S D · Q E · ← → · X。';
+ canvas.setAttribute('aria-label',canvas.getAttribute('aria-label').split('。')[0]+'。マス目を一つずつ歩きます。W/Sで一マス前後、A/Dで横へ一マス、Q/Eまたは左右矢印で90度向きを変え、Xで振り返ります。画面下半分では、上へはじくと一歩前へ（押したままで一歩ずつ進み続ける）、下へはじくと一歩後ろへ、左右へはじくとすぐに90度向きを変えます。一度押し込むと、音とともに押した場所へ少し寄って見つめ、そのまま左右へ滑らせると見渡せます（左右45度ほどまで）。向きは変わりません。カニ歩きは画面下の左右の隅にある薄いボタンで。軽く触れると一マス進みます。');
+ const notes=document.querySelector('.notes p');if(notes)notes.innerHTML='マス目をひとつずつ歩く。下半分で<b>はじく</b>：上で一歩前へ（押したままで一歩ずつ進み続ける）、下で一歩後ろ、<b>左右ですぐに向きを変える</b>。<br><b>一度押し込む</b>と「カチッ」と押した場所へ少し寄る。<b>そのまま左右へ滑らせる</b>と見渡す（左右45度ほどまで、離すと正面へ）。<br>カニ歩きは左右の隅の薄いボタン。軽く触れると一マス。PCは W A S D · Q E · ← → · X。';
  const book=document.querySelector('.book-controls');
- if(book)book.innerHTML='<h3>マス目を歩く</h3><p><b>はじく＝一歩・向き替え</b><br>上：一歩前へ（押したままで一歩ずつ進み続ける）／下：一歩後ろへ<br>左右：はじいた瞬間に、なめらかに90度向きを変える<br><b>一度押し込んで「カチッ」→ 左右へ滑らせる＝見渡す</b><br>視線だけが指についてきて、少し遠くへ寄りながら、左右45度ほどでやわらかく止まります（向きは変わりません）。離すと正面に戻ります。<br><b>カニ歩き</b>：画面下の左右の隅にある薄いボタン。押すたび一マス、押したままで続けて。<br>軽く触れると一マス進みます。</p><p class="keyboard-notes">PC：W / S で前後 ／ A / D で横へ一マス ／ Q E ・ ← → で向き替え ／ X で振り返る<br>Shift で早足 ／ M で地図 ／ H でしおり ／ Esc で入力解除</p>';
+ if(book)book.innerHTML='<h3>マス目を歩く</h3><p><b>はじく＝一歩・向き替え</b><br>上：一歩前へ（押したままで一歩ずつ進み続ける）／下：一歩後ろへ<br>左右：はじいた瞬間に、なめらかに90度向きを変える<br><b>一度押し込む＝その場所へ寄る</b><br>「カチッ」と同時に、押した場所のほうへ少し寄って見つめます。<br><b>押したまま左右へ滑らせる＝見渡す</b><br>寄ったまま視線が指についてきて、左右45度ほどでやわらかく止まります（向きは変わりません）。離すと正面に戻ります。<br><b>カニ歩き</b>：画面下の左右の隅にある薄いボタン。押すたび一マス、押したままで続けて。<br>軽く触れると一マス進みます。</p><p class="keyboard-notes">PC：W / S で前後 ／ A / D で横へ一マス ／ Q E ・ ← → で向き替え ／ X で振り返る<br>Shift で早足 ／ M で地図 ／ H でしおり ／ Esc で入力解除</p>';
 }
 // Side-step buttons (D016): pressing one is a step sideways; holding it walks on, one eased cell at a time. A press too
 // quick to act before release is queued, so it is never lost. They never take focus, so the walk is not interrupted.
