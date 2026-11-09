@@ -69,10 +69,48 @@ export const TRACKS=Object.freeze({
   melody:'0:3 -:2 6:2 7:1 4:2 9:2 -:1 6:2 3:4 -:1 7:2 5:1 2:2 4:3 -:2 1:1 3:2 6:2 0:4 -:1'},
  // Wind cliff: broad horn phrases over a flowing compound rhythm, a distant horizon in dorian.
  watariCliff:{title:'風の断崖',bpm:156,meter:6,root:58,scale:'dorian',lead:'horn',bass:'sway',pad:true,arp:'pluck',drums:'x..x.x',chords:[0,6,3,4,0,2,6,0],
-  melody:'0:3 4:2 6:1 7:4 6:2 4:2 3:1 2:3 1:2 0:2 -:2 4:3 6:2 9:1 7:3 6:1 4:2 3:2 4:1 2:2 1:1 0:5 -:1'}
+  melody:'0:3 4:2 6:1 7:4 6:2 4:2 3:1 2:3 1:2 0:2 -:2 4:3 6:2 9:1 7:3 6:1 4:2 3:2 4:1 2:2 1:1 0:5 -:1'},
+ // The wider island (D024): twelve newly composed pieces, so the long journey beyond the first island no longer loops the
+ // shore theme. Several neighbouring places share one piece; the roads between them have their own.
+ // Wind ring on its hill: a lilting lydian flute waltz that keeps circling back to the same high note.
+ farRing:{title:'風環の丘',bpm:84,meter:3,root:62,scale:'lydian',lead:'flute',bass:'waltz',pad:true,arp:'glass',chords:[0,1,4,0,5,1,3,4],
+  melody:'4:2 6:1 7:2 6:1 4:1.5 3:.5 2:1 0:2 2:1 4:1 6:1 9:2 7:1 6:1 4:1 3:1.5 2:.5 1:1 4:2'},
+ // Harbour town: a cheerful reed tune over a walking bass, as nets dry on the quay.
+ farHarbour:{title:'凪見の港町',bpm:98,meter:4,root:64,scale:'major',lead:'reed',bass:'walk',pad:false,arp:'pluck',drums:'x..x..x.',chords:[0,5,3,4,0,5,1,4],
+  melody:'0:.5 2:.5 4:1 4:.5 5:.5 4:1 2:1 3:1 5:1 4:2 -:1 2:.5 4:.5 7:1 6:1 5:1 4:1 2:1 3:2 -:1 4:1 5:.5 6:.5 7:1 9:1 7:1 6:1 4:2 3:1 2:.5 1:.5 0:3'},
+ // Layered gorge: slow horn calls in dorian that seem to answer themselves from the rock walls.
+ farGorge:{title:'重ね石の渓谷',bpm:72,meter:4,root:57,scale:'dorian',lead:'horn',bass:'long',pad:true,chords:[0,6,5,6,0,3,4,0],
+  melody:'0:2 4:2 3:1 2:1 0:2 -:2 6:2 5:1 4:1 3:2 4:1.5 6:.5 7:2 6:2 4:2 3:2 2:1 1:1 0:4'},
+ // Terraced fields of light: a bright plucked 6/8 that steps down the hillside, terrace by terrace.
+ farFields:{title:'ひかりの棚田',bpm:112,meter:6,root:67,scale:'mixolydian',lead:'pluck',bass:'sway',pad:false,arp:'glass',chords:[0,6,3,0,4,6,3,0],
+  melody:'7:2 6:1 5:2 4:1 3:3 2:3 4:2 5:1 6:2 4:1 2:6 0:2 2:1 4:2 5:1 7:3 6:3 5:2 4:1 3:2 1:1 0:6'},
+ // Open pyramid: hushed strings in an imagined mode, five slow beats and a far bell.
+ farPyramid:{title:'空洞のピラミッド',bpm:62,meter:5,root:60,scale:'phrygianDominant',lead:'strings',bass:'long',pad:true,bell:true,chords:[0,1,0,4,3,1,6,0],
+  melody:'0:3 1:1 2:1 4:4 -:1 5:2 4:1 2:2 1:3 0:2 -:2 4:2 5:1 7:3 6:2 4:3 2:2 1:1 0:4'},
+ // Celestial sphere: the far cape. Wide glass notes and a slow bell, as if the sky were very close.
+ farSphere:{title:'岬の天球',bpm:68,meter:4,root:65,scale:'lydian',lead:'glass',bass:'long',pad:true,bell:true,arp:'musicbox',chords:[0,4,1,4,5,1,3,0],
+  melody:'7:3 -:1 9:2 6:2 4:3 -:1 3:1 4:1 6:3 7:1 11:2 9:2 7:2 4:2 3:1 2:1 0:4'},
+ // Spiral garden: a crooked seven-beat music box that turns and turns.
+ farSpiral:{title:'ねじれの庭',bpm:140,meter:7,root:69,scale:'dorian',lead:'musicbox',bass:'pulse',pad:false,arp:'glass',drums:'x.x..x.',chords:[0,3,4,0,6,3,4,0],
+  melody:'0:1 2:1 4:1 6:2 4:1 2:1 3:2 5:1 7:2 5:2 4:3 6:1 4:1 2:2 3:1 1:1 0:3 2:1 4:2 7:1 9:2 7:2 6:2 4:1 5:1 3:2 2:2 1:2 0:2 2:2 4:1 2:2 0:5'},
+ // White quarry: a working rhythm, firm minor horn phrases over a struck stone pulse.
+ farQuarry:{title:'白い石切り場',bpm:118,meter:4,root:55,scale:'minor',lead:'horn',bass:'pulse',pad:false,arp:'pluck',drums:'x.xx.x.x',chords:[0,5,6,4,0,5,3,4],
+  melody:'0:1 0:.5 2:.5 3:1 4:1 5:2 4:1 3:1 2:1 3:.5 2:.5 0:2 -:1 4:1 5:1 7:1 6:2 5:1 4:1 2:1 3:1 4:.5 5:.5 6:1 4:1 2:2 1:1 0:4'},
+ // Mirror salt fields and the sea causeway: airy glass notes over still water, the sky twice over.
+ farSalt:{title:'水鏡の塩田',bpm:80,meter:4,root:71,scale:'major',lead:'glass',bass:'long',pad:true,arp:'musicbox',chords:[0,3,0,4,5,3,1,4],
+  melody:'4:2 2:1 4:1 7:4 6:2 5:1 4:1 2:4 0:2 2:1 4:1 5:3 4:1 2:2 1:2 0:4'},
+ // Reed garden and the windmill hill: a busy reed jig in three, with a turning windmill of plucked strings.
+ farReeds:{title:'葦と水路の庭',bpm:128,meter:3,root:62,scale:'mixolydian',lead:'reed',bass:'waltz',pad:false,arp:'pluck',drums:'x..',chords:[0,6,3,4,0,6,2,4],
+  melody:'4:1 5:1 6:1 7:2 6:1 4:1 2:1 3:1 4:3 2:1 4:1 6:1 5:2 4:1 2:1 1:1 0:1 2:3'},
+ // White lighthouse, sea library and starry sand: the far east shore at dusk, a slow minor piano and a bell.
+ farLight:{title:'白灯台の岬',bpm:94,meter:4,root:60,scale:'minor',lead:'keys',bass:'long',pad:true,arp:'glass',bell:true,chords:[0,5,2,6,0,3,4,0],
+  melody:'4:2 3:1 2:1 0:2 -:2 2:1 4:1 5:2 4:4 7:2 6:1 5:1 4:2 3:2 2:1 3:1 1:2 0:4'},
+ // The long roads between places: an easy walking flute with a light step, so the journey never falls silent.
+ farRoad:{title:'遠い道',bpm:110,meter:4,root:62,scale:'major',lead:'flute',bass:'walk',pad:false,arp:'pluck',drums:'x...x.x.',chords:[0,4,5,3,0,4,3,4],
+  melody:'0:1 2:1 4:1.5 5:.5 4:2 2:2 3:1 4:1 5:1 7:1 6:3 -:1 4:1 5:1 6:1 7:1 9:2 7:1 6:1 5:1.5 4:.5 3:1 2:1 1:2 0:2'}
 });
 // The quieter places keep a gentler accompaniment: arps on a music box and ticks only on the beats.
-const CALM=new Set(['shallows','snowridge','waterside','meadow','watariCanal','watariLibrary','watariTemple','watariStars']);
+const CALM=new Set(['shallows','snowridge','waterside','meadow','watariCanal','watariLibrary','watariTemple','watariStars','farGorge','farPyramid','farSphere','farSalt','farLight']);
 for(const [id,track] of Object.entries(TRACKS))Object.defineProperty(track,'id',{value:id});
 export function parseMelody(text){
  return text.trim().split(/\s+/).map(token=>{const [d,len]=token.split(':');return {degree:d==='-'?null:Number(d),beats:Number(len)};});

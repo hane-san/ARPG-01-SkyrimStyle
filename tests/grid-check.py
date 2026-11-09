@@ -52,9 +52,16 @@ def expect_step(page,key):
  i,j=cell(page);h=page.evaluate('nagi.grid.heading');dx,dz=HEADINGS[(h+OFFSET[key])%4]
  open_=page.evaluate('([a,b,c,d])=>_gridQA.canStep(a,b,c,d)',[i,j,i+dx,j+dz])
  steps,bumps,feet=page.evaluate('[nagi.grid.steps,nagi.grid.bumps,nagi.footsteps]')
- page.keyboard.press(key);settle(page)
- if open_:assert cell(page)==(i+dx,j+dz) and page.evaluate('nagi.grid.steps')==steps+1 and page.evaluate('nagi.footsteps')==feet+1
- else:assert cell(page)==(i,j) and page.evaluate('nagi.grid.bumps')==bumps+1 and page.evaluate('nagi.footsteps')==feet
+ page.keyboard.press(key)
+ # Wait for the press to start its step or bump before settling: on a slow, loaded renderer no frame may run for half a
+ # second, and settle() would then see a still, idle walker before the press was even handled. The outcome is then
+ # asserted exactly as before.
+ try:page.wait_for_function(f'nagi.grid.steps+nagi.grid.bumps>{steps+bumps}',timeout=15000)
+ except Exception:pass
+ settle(page)
+ state=lambda:{'key':key,'open':open_,'from':(i,j),'cell':cell(page),'steps':(steps,page.evaluate('nagi.grid.steps')),'bumps':(bumps,page.evaluate('nagi.grid.bumps')),'feet':(feet,page.evaluate('nagi.footsteps')),'audio':page.evaluate('nagi.audioState'),'grid':page.evaluate('nagi.grid')}
+ if open_:assert cell(page)==(i+dx,j+dz) and page.evaluate('nagi.grid.steps')==steps+1 and page.evaluate('nagi.footsteps')==feet+1,state()
+ else:assert cell(page)==(i,j) and page.evaluate('nagi.grid.bumps')==bumps+1 and page.evaluate('nagi.footsteps')==feet,state()
  return open_
 
 with sync_playwright() as pw:
@@ -80,7 +87,11 @@ with sync_playwright() as pw:
  assert reach['clearance']>=1.2,reach['clearance']
  print('layout:',reach['cells'],'reachable cells; all roads open; all places, islanders and scenes reachable',flush=True)
  assert 'マス目' in page.locator('.notes p').inner_text()
+ page.bring_to_front()
  page.locator('#begin').click();page.wait_for_function("getComputedStyle(document.querySelector('#arrival')).visibility === 'hidden'",timeout=15000)
+ # Keys reach the game only while its canvas has focus; a page that has just been opened beside a closed one can still be
+ # settling its focus, so wait for that precondition before pressing (an intermittent lost first press came from this).
+ page.wait_for_function("document.hasFocus() && document.activeElement===document.querySelector('#world') && !document.hidden",timeout=15000)
  start=page.evaluate('nagi.position');assert cell(page)==(0,0) and start['yaw']==0 and page.evaluate('nagi.grid.road')
  assert page.locator('#automap').is_visible() and page.evaluate('nagi.grid.automap')
  box=page.locator('#automap').bounding_box();assert box['width']>=140,box
@@ -167,7 +178,8 @@ with sync_playwright() as pw:
  # D022: the upper half never walks or turns, but a press-in there glances and zooms just like below.
  t=time.time();touch('touchStart',300,250,t);touch('touchEnd',at=t+.06);mobile.wait_for_timeout(600);assert actions()==0 and mobile.evaluate('nagi.grid.turns')==0
  clicks0=mobile.evaluate('nagi.grid.holdClicks');touch('touchStart',300,250)
- mobile.wait_for_function(f'nagi.grid.holdClicks>{clicks0} && nagi.fov<62 && nagi.grid.look<-.03',timeout=15000)
+ mobile.wait_for_function(f'nagi.grid.holdClicks>{clicks0} && nagi.fov<62',timeout=15000)
+ ax,ay=mobile.evaluate('nagi.grid.zoomAnchor');assert ax>.4 and ay>.3,(ax,ay)
  touch('touchMove',360,252);mobile.wait_for_function('nagi.grid.look<-.2',timeout=15000);touch('touchMove',360,150);mobile.wait_for_timeout(500)
  assert actions()==0 and mobile.evaluate('nagi.grid.turns')==0
  touch('touchEnd');mobile.wait_for_function('Math.abs(nagi.grid.look)<.01 && nagi.fov===68',timeout=15000)
@@ -189,8 +201,11 @@ with sync_playwright() as pw:
  # Held press (one click), then a short slide right: the view follows the finger, the heading stays; letting go settles.
  clicks=grid('holdClicks')
  t=time.time();touch('touchStart',150,700,t);mobile.wait_for_function(f'nagi.grid.holdClicks>{clicks}',timeout=15000)
- # D021: the click alone already zooms in a little and leans the view toward the pressed spot (left of centre here).
- mobile.wait_for_function('nagi.fov<62 && nagi.grid.look>.03',timeout=15000)
+ # D021/D024: the click alone already zooms in, magnifying around the pressed spot itself (it stays under the finger),
+ # without turning the eyes at all.
+ mobile.wait_for_function('nagi.fov<62',timeout=15000)
+ ax,ay=mobile.evaluate('nagi.grid.zoomAnchor');assert abs(ax-(150/390*2-1))<.02 and abs(ay-(1-700/844*2))<.02,(ax,ay)
+ assert abs(grid('look'))<1e-6 and grid('zoom')>1.1,mobile.evaluate('nagi.grid')
  assert grid('heading')==heading and grid('turns')==turns+2
  touch('touchMove',150+30,702,t+.3);touch('touchMove',150+90,702,t+.35)
  mobile.wait_for_function('nagi.grid.look<-.3',timeout=15000)
@@ -266,6 +281,12 @@ with sync_playwright() as pw:
  words=mobile.locator('#greeting').bounding_box()
  assert words['y']+words['height']<844/2 and not any(overlaps(words,b) for b in boxes.values()),(words,boxes)
  mobile.evaluate("document.querySelector('#greeting').setAttribute('aria-hidden','true')")
+ # D024: a small arrow-only compass sits at the top right, clear of the place name, and turns with the view.
+ cbox=mobile.locator('#compass').bounding_box();assert cbox and cbox['width']<=36 and cbox['x']>390*.75 and cbox['y']<80,cbox
+ assert not overlaps(cbox,mobile.locator('#place').bounding_box() or {'x':0,'y':0,'width':0,'height':0})
+ before_compass,turns_before=grid('compass'),grid('turns')
+ t=time.time();touch('touchStart',195,700,t);touch('touchMove',260,705,t+.08);touch('touchEnd',at=t+.12);mobile.wait_for_function(f'nagi.grid.turns>{turns_before}',timeout=15000);settle(mobile)
+ assert abs(abs(grid('compass')-before_compass)-90)<1 or abs(abs(grid('compass')-before_compass)-270)<1,(before_compass,grid('compass'))
  # The v button steps back one cell, facing unchanged.
  heading,turns,before=grid('heading'),grid('turns'),actions()
  press('#step-back',0);mobile.wait_for_function(f'nagi.grid.steps+nagi.grid.bumps>{before}',timeout=15000);settle(mobile)

@@ -20,9 +20,9 @@ function shader(type,source){const sh=gl.createShader(type);gl.shaderSource(sh,s
 function program(v,f){const p=gl.createProgram();gl.attachShader(p,shader(gl.VERTEX_SHADER,v));gl.attachShader(p,shader(gl.FRAGMENT_SHADER,f));gl.linkProgram(p);if(!gl.getProgramParameter(p,gl.LINK_STATUS))throw Error(gl.getProgramInfoLog(p));return p;}
 const prog=program(vs,fs),loc={};for(const n of ['uVP','uOffset','uEye','uYaw','uRoll','uTime','uWater','uFog','uFogScale'])loc[n]=gl.getUniformLocation(prog,n);
 const attrs=['aP','aN','aC'].map(n=>gl.getAttribLocation(prog,n));
-const skyProg=program(`attribute vec2 a;varying vec2 v;void main(){v=a*.5+.5;gl_Position=vec4(a,.9999,1.);}`,`precision highp float;varying vec2 v;uniform float yaw,aspect,tanHalfFov,skyStars,skyClouds,skyShift;uniform vec3 moonDirection,skyLow,skyHigh;
+const skyProg=program(`attribute vec2 a;varying vec2 v;void main(){v=a*.5+.5;gl_Position=vec4(a,.9999,1.);}`,`precision highp float;varying vec2 v;uniform float yaw,aspect,tanHalfFov,skyStars,skyClouds,skyShift,skyZoom;uniform vec2 skyAnchor;uniform vec3 moonDirection,skyLow,skyHigh;
 void main(){
- vec3 cameraRay=normalize(vec3((v.x*2.-1.)*aspect*tanHalfFov,(v.y*2.-1.-skyShift)*tanHalfFov,-1.));
+ vec2 q=((v*2.-1.)-skyAnchor*(1.-skyZoom))/skyZoom;vec3 cameraRay=normalize(vec3(q.x*aspect*tanHalfFov,(q.y-skyShift)*tanHalfFov,-1.));
  float c=cos(yaw),s=sin(yaw);vec3 ray=normalize(vec3(c*cameraRay.x+s*cameraRay.z,cameraRay.y,-s*cameraRay.x+c*cameraRay.z));
  vec3 col=mix(skyLow,skyHigh,smoothstep(0.,.8,ray.y));
  // World-direction cells keep stars anchored while looking around; no textures or extra draw calls.
@@ -37,7 +37,7 @@ void main(){
  col+=vec3(.012,.01,.004)*exp(-max(0.,1.-alignment)*1800.);
  gl_FragColor=vec4(col,1.);
 }`);
-const skyLoc=Object.fromEntries(['yaw','aspect','tanHalfFov','skyShift','moonDirection','skyLow','skyHigh','skyStars','skyClouds'].map(n=>[n,gl.getUniformLocation(skyProg,n)]));
+const skyLoc=Object.fromEntries(['yaw','aspect','tanHalfFov','skyShift','skyZoom','skyAnchor','moonDirection','skyLow','skyHigh','skyStars','skyClouds'].map(n=>[n,gl.getUniformLocation(skyProg,n)]));
 const skyBuf=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,skyBuf);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,3,-1,-1,3]),gl.STATIC_DRAW);
 let seed=12815;function random(){seed=(1664525*seed+1013904223)>>>0;return seed/4294967296;}const rnd=(a,b)=>a+(b-a)*random();
 const hex=s=>{const n=parseInt(s.replace('#',''),16);return[n>>16&255,n>>8&255,n&255].map(x=>x/255)};
@@ -207,6 +207,9 @@ const obstacles=[],steppingStones=[];
 const CAMERA_FOV=68,CAMERA_NEAR=.18,WALL_MARGIN=nearPlaneMargin(CAMERA_NEAR,CAMERA_FOV,2.4);
 // Looking around after a press-in narrows the view a little toward the distance (D020); free walking keeps 68 always.
 const LOOK_FOV=48;let viewFov=CAMERA_FOV;
+// The zoom magnifies around the pressed spot itself (D024), like a pinch: that spot stays under the finger while the
+// scene grows around it. zoomAnchor is the spot in normalised device coordinates (x right, y up).
+const zoomAnchor=[0,0];const zoomScale=()=>Math.tan(CAMERA_FOV*Math.PI/360)/Math.tan(viewFov*Math.PI/360);
 // Portrait grid travel lifts the horizon a little (a lens shift, D023): the view keeps its 68 degrees but shows more of
 // the land ahead and less empty sky, above the bottom bar. Free walking and landscape screens keep a centred horizon.
 const portraitShift=()=>GRID_MODE?clamp((canvas.height/canvas.width-1)*.14,0,.16):0;
@@ -806,7 +809,7 @@ const notices=new JourneyNotices(),seenScenes=new Set(),sceneDwell=new Map();
 const placeNode=document.querySelector('#place'),greetingNode=document.querySelector('#greeting'),travelBook=document.querySelector('#travel-book');
 let noticeContent=null,paintedNotice=null,previousMovement=false,stillFor=1;
 function resize(){const d=Math.min(devicePixelRatio||1,1.5),w=Math.round(innerWidth*d),h=Math.round(innerHeight*d);if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;gl.viewport(0,0,w,h);}}addEventListener('resize',resize);resize();
-function vp(){const f=1/Math.tan(viewFov*Math.PI/360),aspect=canvas.width/canvas.height,n=CAMERA_NEAR,far=2600,proj=[f/aspect,0,0,0,0,f,0,0,0,-portraitShift(),(far+n)/(n-far),-1,0,0,2*far*n/(n-far),0];const c=Math.cos(camera.yaw),s=Math.sin(camera.yaw),view=[c,0,s,0,0,1,0,0,-s,0,c,0,-c*camera.x+s*camera.z,-camera.y,-s*camera.x-c*camera.z,1],out=new Float32Array(16);for(let j=0;j<4;j++)for(let i=0;i<4;i++){let v=0;for(let k=0;k<4;k++)v+=proj[k*4+i]*view[j*4+k];out[j*4+i]=v;}return out;}
+function vp(){const k=zoomScale(),f=k/Math.tan(CAMERA_FOV*Math.PI/360),aspect=canvas.width/canvas.height,n=CAMERA_NEAR,far=2600,proj=[f/aspect,0,0,0,0,f,0,0,-zoomAnchor[0]*(1-k),-(k*portraitShift()+zoomAnchor[1]*(1-k)),(far+n)/(n-far),-1,0,0,2*far*n/(n-far),0];const c=Math.cos(camera.yaw),s=Math.sin(camera.yaw),view=[c,0,s,0,0,1,0,0,-s,0,c,0,-c*camera.x+s*camera.z,-camera.y,-s*camera.x-c*camera.z,1],out=new Float32Array(16);for(let j=0;j<4;j++)for(let i=0;i<4;i++){let v=0;for(let k=0;k<4;k++)v+=proj[k*4+i]*view[j*4+k];out[j*4+i]=v;}return out;}
 const DRAW_ORIGIN=[0,0,0],WORLD_SCENERY_BOUNDS={x:0,z:-25,r:100},CAMERA_AXES=['x','y','z','yaw'];
 let drawnVertices=0,drawCalls=0,viewCos=1,viewSin=0,viewTangent=1,viewPadding=1;
 function draw(b,offset=DRAW_ORIGIN,yaw=0,water=0,roll=0){gl.bindBuffer(gl.ARRAY_BUFFER,b.buffer);for(let i=0;i<3;i++){gl.enableVertexAttribArray(attrs[i]);gl.vertexAttribPointer(attrs[i],3,gl.FLOAT,false,36,i*12);}gl.uniform3fv(loc.uOffset,offset);gl.uniform1f(loc.uYaw,yaw);gl.uniform1f(loc.uRoll,roll);gl.uniform1f(loc.uWater,water);gl.drawArrays(gl.TRIANGLES,0,b.count);drawnVertices+=b.count;drawCalls++;}
@@ -816,9 +819,9 @@ function visible(b,range=1450){
  return forward>-b.r&&Math.abs(side)<=Math.max(0,forward)*viewTangent+b.r*viewPadding;
 }
 function render(){
- viewCos=Math.cos(camera.yaw);viewSin=Math.sin(camera.yaw);viewTangent=Math.tan(viewFov*Math.PI/360)*canvas.width/canvas.height;viewPadding=Math.hypot(1,viewTangent);
+ viewCos=Math.cos(camera.yaw);viewSin=Math.sin(camera.yaw);viewTangent=Math.tan(CAMERA_FOV*Math.PI/360)*canvas.width/canvas.height;viewPadding=Math.hypot(1,viewTangent);
  drawnVertices=0;drawCalls=0;gl.disable(gl.DEPTH_TEST);gl.useProgram(skyProg);gl.bindBuffer(gl.ARRAY_BUFFER,skyBuf);const a=gl.getAttribLocation(skyProg,'a');gl.enableVertexAttribArray(a);gl.vertexAttribPointer(a,2,gl.FLOAT,false,0,0);
- gl.uniform1f(skyLoc.yaw,camera.yaw);gl.uniform1f(skyLoc.aspect,canvas.width/canvas.height);gl.uniform1f(skyLoc.tanHalfFov,Math.tan(viewFov*Math.PI/360));gl.uniform1f(skyLoc.skyShift,portraitShift());gl.uniform3fv(skyLoc.moonDirection,MOON_DIRECTION);gl.uniform3fv(skyLoc.skyLow,skyMood.low);gl.uniform3fv(skyLoc.skyHigh,skyMood.high);gl.uniform1f(skyLoc.skyStars,skyMood.stars);gl.uniform1f(skyLoc.skyClouds,skyMood.clouds);gl.drawArrays(gl.TRIANGLES,0,3);
+ gl.uniform1f(skyLoc.yaw,camera.yaw);gl.uniform1f(skyLoc.aspect,canvas.width/canvas.height);gl.uniform1f(skyLoc.tanHalfFov,Math.tan(CAMERA_FOV*Math.PI/360));gl.uniform1f(skyLoc.skyShift,portraitShift());gl.uniform1f(skyLoc.skyZoom,zoomScale());gl.uniform2f(skyLoc.skyAnchor,zoomAnchor[0],zoomAnchor[1]);gl.uniform3fv(skyLoc.moonDirection,MOON_DIRECTION);gl.uniform3fv(skyLoc.skyLow,skyMood.low);gl.uniform3fv(skyLoc.skyHigh,skyMood.high);gl.uniform1f(skyLoc.skyStars,skyMood.stars);gl.uniform1f(skyLoc.skyClouds,skyMood.clouds);gl.drawArrays(gl.TRIANGLES,0,3);
  gl.enable(gl.DEPTH_TEST);gl.clear(gl.DEPTH_BUFFER_BIT);gl.useProgram(prog);gl.uniformMatrix4fv(loc.uVP,false,vp());gl.uniform3f(loc.uEye,camera.x,camera.y,camera.z);gl.uniform1f(loc.uTime,reduced?0:time);gl.uniform3fv(loc.uFog,skyMood.low);
  // The far snow ridge keeps its shape through a thinner haze; everything else uses the ordinary fog.
  gl.uniform1f(loc.uFogScale,.32);draw(mountains);gl.uniform1f(loc.uFogScale,skyMood.fog);
@@ -856,7 +859,7 @@ const regionTracker=new RegionTracker(),skyMood={low:new Float32Array(SHORE_REGI
 let music=null;
 function updateRegion(dt){
  const entered=regionTracker.update(player.x,player.z,dt),region=regionTracker.current;
- if(entered){music?.play(region.track);if(entered!==SHORE_REGION&&!announcedRegions.has(entered.id)&&showNotice('place','region:'+entered.id,entered.name,entered.en,3.8))announcedRegions.add(entered.id);}
+ if(entered){music?.play(region.track);if(entered!==SHORE_REGION&&!entered.quiet&&!announcedRegions.has(entered.id)&&showNotice('place','region:'+entered.id,entered.name,entered.en,3.8))announcedRegions.add(entered.id);}
  const k=1-Math.exp(-dt*.7);
  for(let i=0;i<3;i++){skyMood.low[i]+=(region.sky[0][i]-skyMood.low[i])*k;skyMood.high[i]+=(region.sky[1][i]-skyMood.high[i])*k;}
  skyMood.fog+=((region.fogScale??1)-skyMood.fog)*k;skyMood.stars+=((region.stars??0)-skyMood.stars)*k;skyMood.clouds+=((region.id.startsWith('watari')?1:0)-skyMood.clouds)*k;
@@ -870,11 +873,12 @@ function heldCommand(){
  for(let i=keyOrder.length-1;i>=0;i--){const c=keyCommand(keyOrder[i]);if(c)return c;}
  return null;
 }
+const compassNode=document.querySelector('#compass');let compassTurn=null;
 let lookYaw=0,activeCommand=null,bumpedCommand=null,bumpedAt=null;
 function gridUpdate(dt){
  // A still press arms the held mode: a soft click (and a tap of vibration where supported) says so.
- // The click also leans the view toward the spot under the finger (D021): its angle from the screen's centre line.
- if(gridGesture.held&&!gridGesture.armed){const r=canvas.getBoundingClientRect(),u=(gridGesture.x-r.left)/Math.max(1,r.width)*2-1,aim=Math.atan(u*Math.tan(viewFov*Math.PI/360)*r.width/Math.max(1,r.height))/(Math.PI/2);if(gridGesture.arm(performance.now()/1000,aim))holdClick();}
+ // The click also sets the zoom's centre on the spot under the finger (D024): the scene magnifies around it.
+ if(gridGesture.held&&!gridGesture.armed&&gridGesture.arm(performance.now()/1000,0)){const r=canvas.getBoundingClientRect();zoomAnchor[0]=clamp((gridGesture.x-r.left)/Math.max(1,r.width)*2-1,-1,1);zoomAnchor[1]=clamp(1-(gridGesture.origin.y-r.top)/Math.max(1,r.height)*2,-1,1);holdClick();}
  // Looking around (D016/D017/D021): from the press-in click the view leans toward the pressed spot and zooms in a little;
  // sliding sideways moves the eyes from there, easing into 45 degrees either way, and only the eyes: the heading never
  // changes by looking; a flick turns. Letting go settles the view gently back on the heading.
@@ -914,7 +918,8 @@ function gridUpdate(dt){
   }
   if(!held&&!fresh)bumpedCommand=null;
  }
- player.x=walker.x;player.z=walker.z;player.y=walker.y;player.yaw=walker.yaw+lookYaw;player.travelled=walker.travelled;player.actualSpeed=walker.speed;
+ player.x=walker.x;player.z=walker.z;player.y=walker.y;player.yaw=walker.yaw+lookYaw;
+ {const turn=Math.round(player.yaw*180/Math.PI*2)/2;if(turn!==compassTurn){compassTurn=turn;compassNode.style.transform='rotate('+turn+'deg)';}}player.travelled=walker.travelled;player.actualSpeed=walker.speed;
  drawAutomap();
 }
 function update(dt){
@@ -1021,8 +1026,23 @@ addEventListener('keyup',e=>{keys.delete(e.code);keyOrder=keyOrder.filter(k=>k!=
 function resetInput(){keys.clear();const owner=GRID_MODE?gridGesture.reset():gestures.reset();stopMovement();releaseCapture(owner);}
 addEventListener('blur',resetInput);addEventListener('orientationchange',resetInput);
 canvas.addEventListener('blur',resetInput);
-function suspendAudio(){if(audioCtx&&audioCtx.state!=='closed')audioCtx.suspend().catch(()=>{});}
-function resumeAudio(){if(!paused&&!muted&&!contextLost&&!document.hidden&&audioCtx&&audioCtx.state!=='running'&&audioCtx.state!=='closed')audioCtx.resume().then(()=>music?.resync()).catch(()=>{});}
+// Pausing, muting or hiding the page fades the whole mix out over 0.16 s before the audio clock stops (D024): stopping
+// the clock mid-waveform was the 'pop' heard when the travel book opened. Resuming fades back in the same way.
+const MASTER_LEVEL=.22;let audioHold=null;
+function rampMaster(level,seconds){if(!audioCtx||!master)return;const t=audioCtx.currentTime,g=master.gain;g.cancelScheduledValues(t);g.setValueAtTime(g.value,t);g.linearRampToValueAtTime(level,t+seconds);}
+function suspendAudio(now=false){
+ if(!audioCtx||audioCtx.state==='closed')return;
+ clearTimeout(audioHold);
+ if(now){audioCtx.suspend().catch(()=>{});return;}
+ rampMaster(0,.16);
+ audioHold=setTimeout(()=>{if(audioCtx.state!=='closed'&&(paused||muted||document.hidden||contextLost))audioCtx.suspend().catch(()=>{});},190);
+}
+function resumeAudio(){
+ if(paused||muted||contextLost||document.hidden||!audioCtx||audioCtx.state==='closed')return;
+ clearTimeout(audioHold);
+ if(audioCtx.state==='running'){if(master&&master.gain.value<MASTER_LEVEL-1e-3)rampMaster(MASTER_LEVEL,.3);return;}
+ audioCtx.resume().then(()=>{music?.resync();rampMaster(MASTER_LEVEL,.35);}).catch(()=>{});
+}
 function openBook(){
  if(!started||paused)return;
  paused=true;resetInput();notices.clear();paintNotices();suspendAudio();document.body.classList.add('reading');travelBook.showModal();
@@ -1049,7 +1069,7 @@ document.querySelector('#subtitles-toggle').addEventListener('click',e=>{
  notices.setEnabled(!notices.enabled);paintNotices();e.currentTarget.setAttribute('aria-pressed',String(!notices.enabled));e.currentTarget.textContent=notices.enabled?'字幕を休める':'字幕を読む';
 });
 document.addEventListener('visibilitychange',()=>{if(document.hidden){resetInput();suspendAudio();}else if(started)resumeAudio();});
-addEventListener('pagehide',()=>{resetInput();suspendAudio();});
+addEventListener('pagehide',()=>{resetInput();suspendAudio(true);});
 addEventListener('pageshow',()=>{resetInput();last=performance.now();});
 // Native selection, drag, callout, and pinch gestures must never steal a game drag.
 for(const event of ['contextmenu','selectstart','dragstart'])document.addEventListener(event,e=>e.preventDefault());
@@ -1083,7 +1103,7 @@ function makeFootBuffer(surface,variant){
  return buffer;
 }
 function audio(){try{
- audioCtx=new(window.AudioContext||window.webkitAudioContext)();master=audioCtx.createGain();master.gain.value=.22;master.connect(audioCtx.destination);
+ audioCtx=new(window.AudioContext||window.webkitAudioContext)();master=audioCtx.createGain();master.gain.value=MASTER_LEVEL;master.connect(audioCtx.destination);
  const buffer=audioCtx.createBuffer(1,audioCtx.sampleRate*4,audioCtx.sampleRate),v=buffer.getChannelData(0);let b=0;
  for(let i=0;i<v.length;i++){b=(b+(Math.random()*2-1)*.018)/1.018;v[i]=b*3;}
  const noise=audioCtx.createBufferSource();noise.buffer=buffer;noise.loop=true;
@@ -1165,10 +1185,10 @@ function drawAutomap(){
 if(GRID_MODE){
  document.body.classList.add('grid-mode');
  {const label=document.querySelector('#open-book span');if(label)label.textContent='メニュー';}
- canvas.setAttribute('aria-label',canvas.getAttribute('aria-label').split('。')[0]+'。マス目を一つずつ歩きます。W/Sで一マス前後、A/Dで横へ一マス、Q/Eまたは左右矢印で90度向きを変え、Xで振り返ります。画面下半分では、上へはじくと一歩前へ（押したままで一歩ずつ進み続ける）、下へはじくと一歩後ろへ、左右へはじくとすぐに90度向きを変えます。画面のどこでも一度押し込むと、音とともに押した場所へ少し寄って見つめ、そのまま左右へ滑らせると見渡せます（左右45度ほどまで）。向きは変わりません。歩く・向きを変えるのは画面の下半分だけです。カニ歩きは画面下の左右の隅にある薄いボタンで、まん中下のvで一マス後ろへ。メニューは左下、地図は右下です。軽く触れると一マス進みます。');
- const notes=document.querySelector('.notes p');if(notes)notes.innerHTML='マス目をひとつずつ歩く。下半分で<b>はじく</b>：上で一歩前へ（押したままで一歩ずつ進み続ける）、下で一歩後ろ、<b>左右ですぐに向きを変える</b>。<br>画面のどこでも<b>一度押し込む</b>と「カチッ」と押した場所へ少し寄る。<b>そのまま左右へ滑らせる</b>と見渡す（左右45度ほどまで、離すと正面へ）。<br>カニ歩きは左右の隅の薄いボタン、下のvで一歩後ろ。左下にメニュー、右下に地図。軽く触れると一マス。PCは W A S D · Q E · ← → · X。';
+ canvas.setAttribute('aria-label',canvas.getAttribute('aria-label').split('。')[0]+'。マス目を一つずつ歩きます。W/Sで一マス前後、A/Dで横へ一マス、Q/Eまたは左右矢印で90度向きを変え、Xで振り返ります。画面下半分では、上へはじくと一歩前へ（押したままで一歩ずつ進み続ける）、下へはじくと一歩後ろへ、左右へはじくとすぐに90度向きを変えます。画面のどこでも一度押し込むと、音とともに押した場所を中心に景色が大きくなり、そのまま左右へ滑らせると見渡せます（左右45度ほどまで）。向きは変わりません。歩く・向きを変えるのは画面の下半分だけです。カニ歩きは画面下の左右の隅にある薄いボタンで、まん中下のvで一マス後ろへ。メニューは左下、地図は右下です。軽く触れると一マス進みます。');
+ const notes=document.querySelector('.notes p');if(notes)notes.innerHTML='マス目をひとつずつ歩く。下半分で<b>はじく</b>：上で一歩前へ（押したままで一歩ずつ進み続ける）、下で一歩後ろ、<b>左右ですぐに向きを変える</b>。<br>画面のどこでも<b>一度押し込む</b>と「カチッ」と押した場所を中心に拡大。<b>そのまま左右へ滑らせる</b>と見渡す（左右45度ほどまで、離すと正面へ）。<br>カニ歩きは左右の隅の薄いボタン、下のvで一歩後ろ。左下にメニュー、右下に地図。軽く触れると一マス。PCは W A S D · Q E · ← → · X。';
  const book=document.querySelector('.book-controls');
- if(book)book.innerHTML='<h3>マス目を歩く</h3><p><b>はじく＝一歩・向き替え</b><br>上：一歩前へ（押したままで一歩ずつ進み続ける）／下：一歩後ろへ<br>左右：はじいた瞬間に、なめらかに90度向きを変える<br><b>一度押し込む＝その場所へ寄る</b>（画面のどこでも）<br>「カチッ」と同時に、押した場所のほうへ少し寄って見つめます。<br><b>押したまま左右へ滑らせる＝見渡す</b><br>寄ったまま視線が指についてきて、左右45度ほどでやわらかく止まります（向きは変わりません）。離すと正面に戻ります。<br><b>カニ歩き</b>：画面下の左右の隅にある薄いボタン。押すたび一マス、押したままで続けて。<br><b>v</b>：画面下のまん中。押すたび一マス後ろへ。<br>スマホでは、左下にこのメニュー、右下に地図があります。<br>軽く触れると一マス進みます。</p><p class="keyboard-notes">PC：W / S で前後 ／ A / D で横へ一マス ／ Q E ・ ← → で向き替え ／ X で振り返る<br>Shift で早足 ／ M で地図 ／ H でしおり ／ Esc で入力解除</p>';
+ if(book)book.innerHTML='<h3>マス目を歩く</h3><p><b>はじく＝一歩・向き替え</b><br>上：一歩前へ（押したままで一歩ずつ進み続ける）／下：一歩後ろへ<br>左右：はじいた瞬間に、なめらかに90度向きを変える<br><b>一度押し込む＝その場所へ寄る</b>（画面のどこでも）<br>「カチッ」と同時に、押した場所を中心に景色が大きくなります（押したところは指の下のまま）。<br><b>押したまま左右へ滑らせる＝見渡す</b><br>寄ったまま視線が指についてきて、左右45度ほどでやわらかく止まります（向きは変わりません）。離すと正面に戻ります。<br><b>カニ歩き</b>：画面下の左右の隅にある薄いボタン。押すたび一マス、押したままで続けて。<br><b>v</b>：画面下のまん中。押すたび一マス後ろへ。<br>スマホでは、左下にこのメニュー、右下に地図があります。右上の小さな矢印はいつも北を指します。<br>軽く触れると一マス進みます。</p><p class="keyboard-notes">PC：W / S で前後 ／ A / D で横へ一マス ／ Q E ・ ← → で向き替え ／ X で振り返る<br>Shift で早足 ／ M で地図 ／ H でしおり ／ Esc で入力解除</p>';
 }
 // Side-step buttons (D016): pressing one is a step sideways; holding it walks on, one eased cell at a time. A press too
 // quick to act before release is queued, so it is never lost. They never take focus, so the walk is not interrupted.
@@ -1198,4 +1218,4 @@ canvas.addEventListener('webglcontextlost',()=>{
  const error=document.querySelector('#error');error.textContent='島を読み込めませんでした。ページを開き直してください。';error.hidden=false;
 });
 // Minimal diagnostic state for development; no interface is added during play.
-window.nagi={get release(){return document.querySelector('meta[name="nagi-release"]')?.content||'local'},get position(){return{x:player.x,z:player.z,yaw:player.yaw}},get camera(){return{...camera}},get turningRate(){return player.yawRate},get continuousRun(){return player.runSeconds},get surge(){return player.surge},get collisionChecks(){return collisionWorld.checks},get actualSpeed(){return player.actualSpeed},get blockedFor(){return player.blockedFor},get monuments(){return monuments.length},get renderedVertices(){return drawnVertices},get drawCalls(){return drawCalls},get started(){return started},get speed(){return Math.hypot(player.vx,player.vz)},get dragging(){return gestures.held},get fov(){return viewFov},get greetingDistance(){return lastGreetingDistance},get footsteps(){return footstepCount},get audioState(){return audioCtx?.state||'unavailable'},get footSurface(){return lastFootSurface},get worldVertices(){return terrain.count+roadChunks.reduce((n,b)=>n+b.count,0)+world.count+sea.count+scenery.reduce((n,b)=>n+b.count,0)+movingSails.reduce((n,b)=>n+b.count,0)+birdMesh.count},get places(){return [...shownPlaces]},get islanders(){return npcs.length},get greeted(){return npcs.reduce((a,n)=>a+n.index,0)},get region(){return regionTracker.current.id},get musicTrack(){return music?.trackId||null},get skyHorizon(){return [...skyMood.low]},get grid(){return walker?{look:lookYaw,holdClicks,cell:CELL,road:roadCells.has(walker.i+','+walker.j),i:walker.i,j:walker.j,heading:walker.heading,steps:walker.steps,turns:walker.turns,bumps:walker.bumps,visited:walker.visited.size,busy:walker.busy,automap:!automap.hidden}:null}};
+window.nagi={get release(){return document.querySelector('meta[name="nagi-release"]')?.content||'local'},get position(){return{x:player.x,z:player.z,yaw:player.yaw}},get camera(){return{...camera}},get turningRate(){return player.yawRate},get continuousRun(){return player.runSeconds},get surge(){return player.surge},get collisionChecks(){return collisionWorld.checks},get actualSpeed(){return player.actualSpeed},get blockedFor(){return player.blockedFor},get monuments(){return monuments.length},get renderedVertices(){return drawnVertices},get drawCalls(){return drawCalls},get started(){return started},get speed(){return Math.hypot(player.vx,player.vz)},get dragging(){return gestures.held},get fov(){return viewFov},get greetingDistance(){return lastGreetingDistance},get footsteps(){return footstepCount},get audioState(){return audioCtx?.state||'unavailable'},get footSurface(){return lastFootSurface},get worldVertices(){return terrain.count+roadChunks.reduce((n,b)=>n+b.count,0)+world.count+sea.count+scenery.reduce((n,b)=>n+b.count,0)+movingSails.reduce((n,b)=>n+b.count,0)+birdMesh.count},get places(){return [...shownPlaces]},get islanders(){return npcs.length},get greeted(){return npcs.reduce((a,n)=>a+n.index,0)},get region(){return regionTracker.current.id},get musicTrack(){return music?.trackId||null},get skyHorizon(){return [...skyMood.low]},get grid(){return walker?{compass:compassTurn,zoomAnchor:[...zoomAnchor],zoom:zoomScale(),look:lookYaw,holdClicks,cell:CELL,road:roadCells.has(walker.i+','+walker.j),i:walker.i,j:walker.j,heading:walker.heading,steps:walker.steps,turns:walker.turns,bumps:walker.bumps,visited:walker.visited.size,busy:walker.busy,automap:!automap.hidden}:null}};

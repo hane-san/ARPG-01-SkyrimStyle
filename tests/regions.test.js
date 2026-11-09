@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {height} from '../dist/terrain.js';
-import {REGIONS,HOME_REGIONS,WATARI_REGIONS,SHORE_REGION,regionAt,watariRegionAt,RegionTracker} from '../dist/regions.js';
+import {REGIONS,HOME_REGIONS,WATARI_REGIONS,FAR_REGIONS,FAR_ROAD,SHORE_REGION,regionAt,watariRegionAt,RegionTracker,onWiderIsland} from '../dist/regions.js';
+import {landmarks,routes,expeditionRoute,valleyRoute,easternRoute,saltRoute} from '../dist/terrain.js';
 import {TRACKS,parseMelody,trackEvents,degreeToMidi} from '../dist/music.js';
 
 test('twelve compact places on the small island, each with its own track and sky',()=>{
@@ -33,7 +34,8 @@ test('a region change holds for a moment, and crossing an edge back and forth ne
 });
 
 test('every piece is a complete, original arrangement: whole bars, its own melody, meter and instruments',()=>{
- const ids=Object.keys(TRACKS);assert.equal(ids.length,22);
+ // 13 home pieces, 9 for Watari and 12 for the wider island (D024).
+ const ids=Object.keys(TRACKS);assert.equal(ids.length,34);
  const melodies=new Set(),signatures=new Set();
  for(const id of ids){
   const track=TRACKS[id],{events,length,melodyBeats}=trackEvents(track);
@@ -47,7 +49,7 @@ test('every piece is a complete, original arrangement: whole bars, its own melod
   signatures.add([track.bpm,track.meter,track.scale,track.lead].join('/'));
   for(const e of events){assert.ok(e.beat>=0&&e.beat<length,id);if(e.voice!=='drum')assert.ok(e.midi>=24&&e.midi<=100,id+' '+e.midi);}
  }
- assert.equal(melodies.size,22);assert.equal(signatures.size,22);
+ assert.equal(melodies.size,34);assert.equal(signatures.size,34);
  // The snow ridge has its great bell; the terraces and the gate have hand drums.
  assert.ok(trackEvents(TRACKS.snowridge).events.some(e=>e.voice==='bell'));
  assert.ok(trackEvents(TRACKS.terraces).events.some(e=>e.voice==='drum'));
@@ -112,4 +114,23 @@ test('a complete outward and homeward presentation journey restores every home e
  for(const r of [...WATARI_REGIONS].reverse())assert.equal(enter(r.x,r.z).id,r.id);
  for(const r of HOME_REGIONS){const actual=enter(r.x,r.z);assert.equal(actual.id,r.id);assert.deepEqual(actual.sky,r.sky);}
  assert.deepEqual(enter(8,30),SHORE_REGION);
+});
+
+test('the wider island no longer falls back to the shore theme: every place has its music, the roads their own',()=>{
+ for(const r of FAR_REGIONS){
+  assert.ok(TRACKS[r.track],r.id);assert.equal(r.quiet,true,r.id);
+  assert.equal(r.sky.length,2);for(const c of r.sky)assert.ok(c.length===3&&c.every(v=>v>.4&&v<.95),r.id);
+  assert.equal(regionAt(r.x,r.z).id,r.id,r.id+' owns its centre');
+ }
+ // Every named place out there sits inside its own area.
+ for(const [name,,x,z] of landmarks)if(onWiderIsland(x,z)&&!watariRegionAt(x,z))assert.ok(regionAt(x,z).id.startsWith('far'),name);
+ // Walking every route of the wider island never meets the shore theme; between places the long road plays.
+ const tracks=new Set();
+ for(const route of [expeditionRoute,valleyRoute,easternRoute,saltRoute])for(let k=1;k<route.length;k++){
+  const [ax,az]=route[k-1],[bx,bz]=route[k];
+  for(let t=0;t<=1;t+=.02){const x=ax+(bx-ax)*t,z=az+(bz-az)*t;if(!onWiderIsland(x,z)||watariRegionAt(x,z))continue;const r=regionAt(x,z);assert.notEqual(r.track,'shore',[x,z]);tracks.add(r.track);}
+ }
+ assert.ok(tracks.has('farRoad')&&tracks.size>=10,[...tracks]);
+ // The first island keeps its shore theme between its own places.
+ assert.equal(regionAt(8,30).track,'shore');assert.equal(FAR_ROAD.track,'farRoad');
 });
