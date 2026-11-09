@@ -131,10 +131,11 @@ button:focus-visible{outline:2px solid #385e4b;outline-offset:4px}
  .grid-mode #greeting{top:calc(var(--safe-top) + 70px);max-width:calc(100vw - 12vw - 200px)}
 }
 
-/* D024: the travel book rises and fades in rather than snapping open; reduced motion keeps it instant. */
+/* D024: the travel book fades in rather than snapping open (opacity only, so its size and safe-area fit never change
+   mid-animation); reduced motion keeps it instant. */
 #travel-book[open]{animation:book-in .34s cubic-bezier(.2,.8,.2,1)}
 #travel-book[open]::backdrop{animation:veil-in .34s ease}
-@keyframes book-in{from{opacity:0;transform:translateY(14px) scale(.985)}to{opacity:1;transform:none}}
+@keyframes book-in{from{opacity:0}to{opacity:1}}
 @keyframes veil-in{from{opacity:0}to{opacity:1}}
 @media(prefers-reduced-motion:reduce){#travel-book[open],#travel-book[open]::backdrop{animation:none}}
 /* D024: one frosted style for the touch bar, so the buttons, the menu and the map read as a set and stay quiet. */
