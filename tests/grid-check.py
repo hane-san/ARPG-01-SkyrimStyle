@@ -252,12 +252,26 @@ with sync_playwright() as pw:
  heading,turns,before=grid('heading'),grid('turns'),actions()
  t=time.time();touch('touchStart',195,700,t);touch('touchEnd',at=t+.06);settle(mobile)
  assert actions()==before+1 and grid('heading')==heading and grid('turns')==turns and abs(grid('look'))<.01
- box=mobile.locator('#automap').bounding_box();assert box and box['y']+box['height']<844/2,box
- # The greeting sits clear of the larger map.
+ # D023: on a touch screen the bottom bar reads < メニュー … map > with a step-back v in the middle; nothing overlaps,
+ # all stay in the bottom fifth, the map is a little smaller, and the greeting sits high, clear of all of them.
+ boxes={k:mobile.locator(k).bounding_box() for k in ['#side-left','#open-book','#step-back','#automap','#side-right']}
+ assert all(boxes.values()),boxes
+ xs=[boxes[k]['x'] for k in ['#side-left','#open-book','#step-back','#automap','#side-right']];assert xs==sorted(xs),boxes
+ for k,b in boxes.items():assert b['y']>844*.8 and b['y']+b['height']<=844,(k,b)
+ assert 80<=boxes['#automap']['width']<=110 and boxes['#automap']['x']+boxes['#automap']['width']>390*.6,boxes['#automap']
+ assert boxes['#open-book']['x']<390*.4 and 'メニュー' in mobile.locator('#open-book').inner_text()
+ overlaps=lambda a,b:min(a['x']+a['width'],b['x']+b['width'])-max(a['x'],b['x'])>0 and min(a['y']+a['height'],b['y']+b['height'])-max(a['y'],b['y'])>0
+ names=list(boxes);assert not [(a,b) for i,a in enumerate(names) for b in names[i+1:] if overlaps(boxes[a],boxes[b])],boxes
  mobile.evaluate("document.querySelector('#greeting').setAttribute('aria-hidden','false')")
  words=mobile.locator('#greeting').bounding_box()
- overlap=min(box['x']+box['width'],words['x']+words['width'])-max(box['x'],words['x'])>0 and min(box['y']+box['height'],words['y']+words['height'])-max(box['y'],words['y'])>0
- assert not overlap,(box,words)
+ assert words['y']+words['height']<844/2 and not any(overlaps(words,b) for b in boxes.values()),(words,boxes)
+ mobile.evaluate("document.querySelector('#greeting').setAttribute('aria-hidden','true')")
+ # The v button steps back one cell, facing unchanged.
+ heading,turns,before=grid('heading'),grid('turns'),actions()
+ press('#step-back',0);mobile.wait_for_function(f'nagi.grid.steps+nagi.grid.bumps>{before}',timeout=15000);settle(mobile)
+ assert actions()==before+1 and grid('heading')==heading and grid('turns')==turns
+ # Portrait lifts the horizon a little (a lens shift): the view still spans 68 degrees.
+ mobile.wait_for_function('nagi.fov===68',timeout=10000)
  mobile.screenshot(path=str(root/'grid-mobile.png'))
  assert not errors,errors
  browser.close()

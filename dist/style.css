@@ -99,7 +99,7 @@ button:focus-visible{outline:2px solid #385e4b;outline-offset:4px}
  #words{font-size:13px}
 }
 
-/* Opt-in grid mode (?grid=1): a small automap below the travel book button, clear of the lower touch half. */
+/* Grid mode on a desktop: a small automap below the travel book button. Touch screens use the bottom bar (D023). */
 #automap{position:fixed;inset:auto;top:calc(var(--safe-top) + 68px);right:max(4vw,var(--safe-right));width:148px;height:148px;border:1px solid #f3f0e255;border-radius:6px;box-shadow:0 4px 18px #1d2e2a40;pointer-events:none}
 #automap[hidden],body:not(.playing) #automap{display:none}
 .reading #automap{opacity:0}
@@ -114,6 +114,18 @@ button:focus-visible{outline:2px solid #385e4b;outline-offset:4px}
 .grid-mode.playing.touch .side-step{display:block}
 .reading .side-step{display:none!important}
 @media(max-width:700px),(pointer:coarse){.grid-mode #greeting{top:calc(var(--safe-top) + 230px)}}
+/* Touch layout in grid mode (D023): a compact bar along the bottom edge, < メニュー … 🗺 >, with a step-back v in the
+   middle. The map and the menu move down from the top, so the sky and the captions are left clear. */
+.grid-mode.touch-ui .side-step{width:44px;height:64px;border-radius:22px;bottom:calc(var(--safe-bottom) + 12px)}
+.grid-mode.touch-ui #step-back{left:50%;width:64px;height:44px;margin-left:-32px;bottom:calc(var(--safe-bottom) + 8px)}
+.grid-mode.touch-ui #open-book{top:auto;right:auto;bottom:calc(var(--safe-bottom) + 12px);left:calc(max(3vw,var(--safe-left)) + 52px);min-height:44px;padding:8px 10px;gap:6px;font-size:11px}
+.grid-mode.touch-ui #open-book span{display:inline}
+.grid-mode.touch-ui #open-book svg{width:14px;height:16px}
+.grid-mode.touch-ui #automap{top:auto;bottom:calc(var(--safe-bottom) + 12px);right:calc(max(3vw,var(--safe-right)) + 52px);width:96px;height:96px}
+.grid-mode.touch-ui #greeting{top:calc(var(--safe-top) + 92px)}
+@media(max-height:600px) and (orientation:landscape){
+ .grid-mode.touch-ui #greeting{top:calc(var(--safe-top) + 70px)}
+}
 @media(max-height:600px) and (orientation:landscape){
  #automap{top:calc(var(--safe-top) + 12px);right:calc(max(4vw,var(--safe-right)) + 56px);width:112px;height:112px}
  .grid-mode #greeting{top:calc(var(--safe-top) + 70px);max-width:calc(100vw - 12vw - 200px)}
