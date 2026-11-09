@@ -36,6 +36,15 @@
 <div id="greeting" role="status" aria-live="polite" aria-hidden="true"><span id="speaker"></span><p id="words"></p></div>
 <div id="hint" aria-hidden="true"></div>
 <div id="error" role="alert" hidden>この島には WebGL が必要です。WebGL に対応したブラウザで開いてください。</div>
+<script>
+ // A quick second tap or a pinch must never zoom the page, the title screen included (iOS Safari can still double-tap
+ // zoom). Only the open travel book may be pinched, so its text can be enlarged.
+ const bookOpen=()=>{const b=document.querySelector('#travel-book');return !!(b&&b.open);};
+ let lastTap=-1e9,lastX=0,lastY=0;
+ document.addEventListener('touchend',e=>{const t=e.changedTouches[0];if(!t||e.touches.length)return;const quick=e.timeStamp-lastTap<350&&Math.hypot(t.clientX-lastX,t.clientY-lastY)<48;lastTap=e.timeStamp;lastX=t.clientX;lastY=t.clientY;if(quick&&!bookOpen()&&e.cancelable)e.preventDefault();},{passive:false});
+ document.addEventListener('dblclick',e=>{if(!bookOpen())e.preventDefault();});
+ for(const name of ['gesturestart','gesturechange'])document.addEventListener(name,e=>{if(!bookOpen())e.preventDefault();},{passive:false});
+</script>
 <script type="module">
  const fail=()=>{const error=document.querySelector('#error');if(error.hidden){error.textContent='島を読み込めませんでした。ページを開き直してください。';error.hidden=false;}document.querySelector('#begin').disabled=true;};
  window.addEventListener('error',fail,{once:true});

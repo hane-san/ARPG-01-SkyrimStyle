@@ -141,10 +141,18 @@ with sync_playwright() as pw:
  assert page.evaluate('nagi.audioState')=='running'
  page.close()
 
- # Touch (D016): upper half ignored; tap is one action; a held flick up repeats; a sideways flick turns; a held slide looks; corner buttons crab.
+ # Touch (D016, D022): the upper half only glances; tap is one action; a held flick up repeats; a sideways flick turns; a held slide looks; corner buttons crab.
  context=browser.new_context(viewport={'width':390,'height':844},is_mobile=True,has_touch=True)
  mobile=context.new_page();mobile.on('pageerror',lambda e:errors.append(str(e)));install(mobile)
  mobile.goto(base,wait_until='networkidle');mobile.wait_for_function('!!window.nagi && !!nagi.grid',timeout=30000)
+ # D022: a quick double tap on the title never zooms: the second quick touchend is cancelled and the page scale stays 1.
+ mobile.evaluate("window._taps=[];addEventListener('touchend',e=>_taps.push(e.defaultPrevented))")
+ title=mobile.locator('h1').bounding_box();tx,ty=title['x']+title['width']/2,title['y']+title['height']/2
+ title_cdp=context.new_cdp_session(mobile);t=time.time()
+ for k,at in enumerate([t,t+.05,t+.2,t+.25]):title_cdp.send('Input.dispatchTouchEvent',{'type':'touchStart' if k%2==0 else 'touchEnd','touchPoints':[{'x':tx,'y':ty,'id':1}] if k%2==0 else [],'timestamp':at})
+ taps=mobile.evaluate('_taps');assert taps[:2]==[False,True],taps
+ assert mobile.evaluate('visualViewport.scale')==1 and not mobile.evaluate('nagi.started')
+ mobile.wait_for_timeout(500)
  mobile.locator('#begin').tap();mobile.wait_for_function("getComputedStyle(document.querySelector('#arrival')).visibility === 'hidden'",timeout=15000)
  cdp=context.new_cdp_session(mobile)
  # Explicit event times stand for the finger's real timing: software rendering can otherwise delay a release
@@ -156,6 +164,13 @@ with sync_playwright() as pw:
  actions=lambda:mobile.evaluate('nagi.grid.steps+nagi.grid.bumps')
  touch('touchStart',195,250);touch('touchMove',195,150);mobile.wait_for_timeout(500);touch('touchEnd');mobile.wait_for_timeout(300)
  assert actions()==0
+ # D022: the upper half never walks or turns, but a press-in there glances and zooms just like below.
+ t=time.time();touch('touchStart',300,250,t);touch('touchEnd',at=t+.06);mobile.wait_for_timeout(600);assert actions()==0 and mobile.evaluate('nagi.grid.turns')==0
+ clicks0=mobile.evaluate('nagi.grid.holdClicks');touch('touchStart',300,250)
+ mobile.wait_for_function(f'nagi.grid.holdClicks>{clicks0} && nagi.fov<62 && nagi.grid.look<-.03',timeout=15000)
+ touch('touchMove',360,252);mobile.wait_for_function('nagi.grid.look<-.2',timeout=15000);touch('touchMove',360,150);mobile.wait_for_timeout(500)
+ assert actions()==0 and mobile.evaluate('nagi.grid.turns')==0
+ touch('touchEnd');mobile.wait_for_function('Math.abs(nagi.grid.look)<.01 && nagi.fov===68',timeout=15000)
  t=time.time();touch('touchStart',195,700,t);touch('touchEnd',at=t+.06);settle(mobile);assert actions()==1,mobile.evaluate('nagi.grid')
  # A press held longer than the tap window is not a step.
  t=time.time();touch('touchStart',195,700,t);touch('touchEnd',at=t+.6);settle(mobile);assert actions()==1
