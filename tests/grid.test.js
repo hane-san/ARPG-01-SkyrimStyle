@@ -313,3 +313,37 @@ test('a turn is unhurried but answers at once, and a second turn asked for near 
  // Without chain (a held key), the next quarter still waits for the landing and the pause.
  const k=new GridWalker(flat(),{origin:[0,0]});k.command('turnLeft');while(k.action.t<k.action.duration*.9)k.update(dt);assert.equal(k.command('turnLeft'),null);
 });
+
+test('districts of 20 x 20 cells: the first island is district (0,0) with the landing in its southern row',async()=>{
+ const {AREA_SIZE,areaOf,areaKey,areaStart}=await import('../dist/grid.js');
+ assert.equal(AREA_SIZE,20);assert.deepEqual(areaOf(0,0),[0,0]);assert.deepEqual(areaOf(-10,-19),[0,0]);assert.deepEqual(areaOf(9,0),[0,0]);
+ assert.deepEqual(areaOf(10,0),[1,0]);assert.deepEqual(areaOf(0,-20),[0,-1]);assert.deepEqual(areaOf(0,1),[0,1]);
+ assert.equal(areaKey(-11,0),'-1,0');assert.deepEqual(areaStart(0,-1),[-10,-39]);
+});
+
+test('gates: roads keep theirs, and only as many more open as keep every reachable cell reachable',async()=>{
+ const {planGates,areaKey,edgeKey}=await import('../dist/grid.js');
+ // A 40 x 20 open field (two districts side by side) with no road: exactly one gate opens, near the middle of the border.
+ const inside=(i,j)=>i>=-10&&i<30&&j>=-19&&j<=0,can=(a,b,c,d)=>inside(c,d)&&inside(a,b),crosses=(a,b,c,d)=>areaKey(a,b)!==areaKey(c,d);
+ const mid=(a,b,c,d)=>Math.abs(b-(-19)-9.5);
+ const one=planGates([0,0],can,crosses,mid);
+ assert.equal(one.gates.size,2);assert.equal(one.seen.size,800);
+ const [g]=[...one.gates];const j=Number(g.split('>')[0].split(',')[1]);assert.ok(Math.abs(j+9.5)<=1,g);
+ // A road crossing is kept as given, and then nothing more is needed.
+ const road=planGates([0,0],can,crosses,mid,[[9,-3,10,-3]]);assert.equal(road.gates.size,2);assert.ok(road.gates.has(edgeKey(9,-3,10,-3)));
+ // A wall splitting the far district in two needs a second gate into the cut-off half.
+ const split=(a,b,c,d)=>can(a,b,c,d)&&!((b<=-10)!==(d<=-10)&&a>=10&&c>=10);
+ assert.equal(planGates([0,0],split,crosses,mid).gates.size,4);
+});
+
+test('a carved maze is perfect: every cell reachable, exactly one path (cells - 1 open inner edges)',async()=>{
+ const {carveMaze,edgeKey,HEADINGS:H}=await import('../dist/grid.js');
+ const w=7,h=7,walls=carveMaze(0,0,w,h,7349);
+ let inner=0;for(let a=0;a<w;a++)for(let b=0;b<h;b++){if(a+1<w)inner++;if(b+1<h)inner++;}
+ assert.equal(walls.size/2,inner-(w*h-1));
+ const seen=new Set(['0,0']),queue=[[0,0]];
+ while(queue.length){const [a,b]=queue.pop();for(const [dx,dz] of H){const x=a+dx,y=b+dz;if(x<0||y<0||x>=w||y>=h||seen.has(x+','+y)||walls.has(edgeKey(a,b,x,y)))continue;seen.add(x+','+y);queue.push([x,y]);}}
+ assert.equal(seen.size,w*h);
+ // The same seed always carves the same maze.
+ assert.deepEqual([...carveMaze(0,0,w,h,7349)].sort(),[...walls].sort());
+});

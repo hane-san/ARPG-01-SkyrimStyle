@@ -102,9 +102,10 @@ export function regionAt(x,z,current=null){
 }
 // A new region must hold for `delay` seconds before it takes over: crossing an edge back and forth never flickers.
 export class RegionTracker {
- constructor(delay=.7){this.delay=delay;this.current=SHORE_REGION;this.candidate=null;this.held=0;}
+ // resolve: how a position maps to a region (grid travel passes its districts, D025); free walking uses regionAt.
+ constructor(delay=.7,resolve=regionAt){this.delay=delay;this.resolve=resolve;this.current=SHORE_REGION;this.candidate=null;this.held=0;}
  update(x,z,dt){
-  const next=regionAt(x,z,this.current.id);
+  const next=this.resolve(x,z,this.current.id);
   if(next.id===this.current.id){this.candidate=null;this.held=0;return null;}
   if(this.candidate!==next.id){this.candidate=next.id;this.held=0;}
   this.held+=dt;if(this.held<this.delay)return null;

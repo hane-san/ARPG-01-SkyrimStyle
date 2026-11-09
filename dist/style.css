@@ -100,7 +100,8 @@ button:focus-visible{outline:2px solid #385e4b;outline-offset:4px}
 }
 
 /* Grid mode on a desktop: a small automap below the travel book button. Touch screens use the bottom bar (D023). */
-#automap{position:fixed;inset:auto;top:calc(var(--safe-top) + 68px);right:max(4vw,var(--safe-right));width:148px;height:148px;border:1px solid #f3f0e255;border-radius:6px;box-shadow:0 4px 18px #1d2e2a40;pointer-events:none}
+#automap{position:fixed;inset:auto;top:calc(var(--safe-top) + 68px);right:max(4vw,var(--safe-right));width:148px;height:148px;border:1px solid #f3f0e255;border-radius:6px;box-shadow:0 4px 18px #1d2e2a40;pointer-events:auto;cursor:pointer;touch-action:none;-webkit-tap-highlight-color:transparent}
+/* D025: the map is a button: a tap switches between the whole district and the close view. */
 #automap[hidden],body:not(.playing) #automap{display:none}
 .reading #automap{opacity:0}
 
@@ -117,11 +118,17 @@ button:focus-visible{outline:2px solid #385e4b;outline-offset:4px}
 /* Touch layout in grid mode (D023): a compact bar along the bottom edge, < メニュー … 🗺 >, with a step-back v in the
    middle. The map and the menu move down from the top, so the sky and the captions are left clear. */
 .grid-mode.touch-ui .side-step{width:44px;height:64px;border-radius:22px;bottom:calc(var(--safe-bottom) + 12px)}
-.grid-mode.touch-ui #step-back{left:50%;width:64px;height:44px;margin-left:-32px;bottom:calc(var(--safe-bottom) + 8px)}
+/* The menu has a fixed width and v sits just after it, so the bar never depends on how wide a font draws メニュー. */
+.grid-mode.touch-ui #step-back{left:calc(max(3vw,var(--safe-left)) + 134px);width:52px;height:44px;margin-left:0;bottom:calc(var(--safe-bottom) + 8px)}
+@media(max-width:360px){
+ .grid-mode.touch-ui #open-book span{display:none}
+ .grid-mode.touch-ui #automap{width:96px;height:96px}
+ .grid-mode.touch-ui #step-back{left:calc(max(3vw,var(--safe-left)) + 100px);width:44px}
+}
 .grid-mode.touch-ui #open-book{top:auto;right:auto;bottom:calc(var(--safe-bottom) + 12px);left:calc(max(3vw,var(--safe-left)) + 52px);min-height:44px;padding:8px 10px;gap:6px;font-size:11px}
 .grid-mode.touch-ui #open-book span{display:inline}
 .grid-mode.touch-ui #open-book svg{width:14px;height:16px}
-.grid-mode.touch-ui #automap{top:auto;bottom:calc(var(--safe-bottom) + 12px);right:calc(max(3vw,var(--safe-right)) + 52px);width:96px;height:96px}
+.grid-mode.touch-ui #automap{top:auto;bottom:calc(var(--safe-bottom) + 12px);right:calc(max(3vw,var(--safe-right)) + 52px);width:112px;height:112px}
 .grid-mode.touch-ui #greeting{top:calc(var(--safe-top) + 92px)}
 @media(max-height:600px) and (orientation:landscape){
  .grid-mode.touch-ui #greeting{top:calc(var(--safe-top) + 70px)}
@@ -153,3 +160,6 @@ button:focus-visible{outline:2px solid #385e4b;outline-offset:4px}
 .grid-mode.playing #compass{display:block}
 .grid-mode.touch-ui #compass{right:max(4vw,var(--safe-right));top:calc(var(--safe-top) + 20px)}
 .reading #compass{opacity:0}
+
+.grid-mode.touch-ui #open-book{width:76px;min-width:0;justify-content:center;letter-spacing:.04em;overflow:hidden;white-space:nowrap}
+@media(max-width:360px){.grid-mode.touch-ui #open-book{width:44px}}

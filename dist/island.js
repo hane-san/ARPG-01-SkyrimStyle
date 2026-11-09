@@ -1,11 +1,11 @@
 const {useGridTerrain,START_LANDFORMS,terrainHeight,height,walkable,clamp,smooth,routes,landmarks,distanceToRoute,WORLD_BOUNDS,monuments,expeditionRoute,valleyRoute,easternRoute,saltRoute,MOON_DIRECTION}=await import('./terrain.js'+new URL(import.meta.url).search);
 const {CRUISE_SPEED,footStride,nearPlaneMargin,CollisionWorld,circleCollider,boxCollider,GestureInput,createMotionState,resetMotion,stepMotion,readMovementInput}=await import('./movement.js'+new URL(import.meta.url).search);
 const {journeyScenes,landscapeColor,readingSeconds,JourneyNotices}=await import('./journey.js'+new URL(import.meta.url).search);
-const {REGIONS,SHORE_REGION,RegionTracker,watariRegionAt}=await import('./regions.js'+new URL(import.meta.url).search);
+const {REGIONS,HOME_REGIONS,FAR_REGIONS,FAR_ROAD,SHORE_REGION,RegionTracker,watariRegionAt}=await import('./regions.js'+new URL(import.meta.url).search);
 const {WATARI_BRIDGE,WATARI_DECK_ROWS,watariRoutes,onWatariBridge,watariDeckHeight}=await import('./watari.js'+new URL(import.meta.url).search);
 const {buildWatariScenery}=await import('./watari-scenery.js'+new URL(import.meta.url).search);
-const {RegionMusic}=await import('./music.js'+new URL(import.meta.url).search);
-const {ONE_SHOT,TURN_COMMANDS,GRID_CLEARANCE,CELL,GRID_ORIGIN,STEP_SECONDS,QUICK_STEP_SECONDS,HEADING_NAMES,GridWalker,GridGesture,keyCommand,automapCells,gridRoute,gridCells}=await import('./grid.js'+new URL(import.meta.url).search);
+const {RegionMusic,TRACKS}=await import('./music.js'+new URL(import.meta.url).search);
+const {ONE_SHOT,TURN_COMMANDS,GRID_CLEARANCE,CELL,GRID_ORIGIN,STEP_SECONDS,QUICK_STEP_SECONDS,HEADING_NAMES,HEADINGS,AREA_SIZE,areaOf,areaKey,areaStart,edgeKey,planGates,carveMaze,GridWalker,GridGesture,keyCommand,automapCells,gridRoute,gridCells}=await import('./grid.js'+new URL(import.meta.url).search);
 // Dungeon-crawler travel is the default (producer decision 2026-11-04): the same island, one grid cell at a time.
 // ?grid=0 keeps the earlier free walking for comparison and its regression checks.
 const GRID_MODE=new URLSearchParams(location.search).get('grid')!=='0';
@@ -798,6 +798,85 @@ const player=createMotionState(8,30,.25);player.y=height(8,30)+1.65;
 // Grid cells are 3 m, centred on the landing; the walker faces north up the island.
 const walker=GRID_MODE?new GridWalker(collisionWorld,{origin:GRID_ORIGIN,cell:CELL,heading:0,clearance:GRID_CLEARANCE,exempt:(i,j)=>roadCells.has(i+','+j)}):null;
 if(walker){player.yaw=walker.yaw;player.y=walker.y;}
+// D025: districts of 20 x 20 cells, as a dungeon has floors. Each border is a hedge, open only at gates: wherever a road
+// crosses, and wherever else the ground beyond could not otherwise be reached. Watari keeps its own authored layout beyond
+// its bridge, so no border runs through it. A hedge maze with a folk-art centrepiece stands in one district.
+const watariCells=new Map(),watariCell=(i,j)=>{const k=i+','+j;let v=watariCells.get(k);if(v===undefined){const [x,z]=cellCentre(i,j);v=!!watariRegionAt(x,z);watariCells.set(k,v);}return v;};
+const crossesArea=(i,j,ni,nj)=>areaKey(i,j)!==areaKey(ni,nj)&&!watariCell(i,j)&&!watariCell(ni,nj);
+let areaGates=new Set(),mazeWalls=new Set(),maze=null,areaOrder=[];
+const MAZE_W=7,MAZE_H=7;
+if(GRID_MODE){
+ const both=(a,b,c,d)=>walker.canStep(a,b,c,d)&&walker.canStep(c,d,a,b);
+ // The maze: the nearest 7 x 7 block, inside one district and clear of its border, whose cells are all open ground (no road,
+ // prop, place, islander or scene nearby) with every inner step free, and with open ground at the middle of its south and
+ // north sides for the two entrances.
+ const busy=(i,j)=>{const [x,z]=cellCentre(i,j),near=(px,pz,r)=>Math.hypot(px-x,pz-z)<r;return roadCells.has(i+','+j)||claimedCells.has(i+','+j)||watariCell(i,j)||landmarks.some(([,,lx,lz,r])=>near(lx,lz,Math.max(r,CELL*1.5)))||npcs.some(n=>near(n.x,n.z,CELL*2))||scenes.some(sc=>near(sc.x,sc.z,CELL*2));};
+ const blockOk=(i0,j0)=>{
+  const [ai,aj]=areaOf(i0,j0),[s0,t0]=areaStart(ai,aj);
+  if(i0<s0+1||j0<t0+1||i0+MAZE_W>s0+AREA_SIZE-1||j0+MAZE_H>t0+AREA_SIZE-1)return false;
+  for(let a=0;a<MAZE_W;a++)for(let b=0;b<MAZE_H;b++){const i=i0+a,j=j0+b;if(busy(i,j))return false;if(a+1<MAZE_W&&!both(i,j,i+1,j))return false;if(b+1<MAZE_H&&!both(i,j,i,j+1))return false;}
+  const mid=i0+(MAZE_W>>1);return both(mid,j0+MAZE_H-1,mid,j0+MAZE_H)&&both(mid,j0,mid,j0-1)&&!busy(mid,j0+MAZE_H)&&!busy(mid,j0-1);
+ };
+ search:for(const [ai,aj] of [[0,-1],[-1,-1],[1,-1],[0,-2],[-1,-2],[1,-2],[0,0]]){
+  const [s0,t0]=areaStart(ai,aj),spots=[];
+  for(let j0=t0+1;j0+MAZE_H<=t0+AREA_SIZE-1;j0++)for(let i0=s0+1;i0+MAZE_W<=s0+AREA_SIZE-1;i0++)spots.push([i0,j0]);
+  spots.sort((p,q)=>Math.hypot(p[0]+3,p[1]+3)-Math.hypot(q[0]+3,q[1]+3));
+  for(const [i0,j0] of spots)if(blockOk(i0,j0)){maze={i0,j0};break search;}
+ }
+ if(maze){
+  const {i0,j0}=maze,mid=i0+(MAZE_W>>1);mazeWalls=carveMaze(i0,j0,MAZE_W,MAZE_H,7349);
+  const wall=(a,b,c,d)=>{mazeWalls.add(edgeKey(a,b,c,d));mazeWalls.add(edgeKey(c,d,a,b));};
+  for(let a=0;a<MAZE_W;a++){if(i0+a!==mid)wall(i0+a,j0,i0+a,j0-1);if(i0+a!==mid)wall(i0+a,j0+MAZE_H-1,i0+a,j0+MAZE_H);}
+  for(let b=0;b<MAZE_H;b++){wall(i0,j0+b,i0-1,j0+b);wall(i0+MAZE_W-1,j0+b,i0+MAZE_W,j0+b);}
+ }
+ walker.barrier=(i,j,ni,nj)=>mazeWalls.has(edgeKey(i,j,ni,nj));
+ // Gates: every road crossing first, then only what keeps the rest reachable, each as near the middle of its border as the
+ // ground allows.
+ const roadGates=[];
+ for(const k of roadCells){const [i,j]=k.split(',').map(Number);for(const [dx,dz] of HEADINGS){const ni=i+dx,nj=j+dz;if(roadCells.has(ni+','+nj)&&crossesArea(i,j,ni,nj)&&both(i,j,ni,nj))roadGates.push([i,j,ni,nj]);}}
+ const middle=(i,j,ni,nj)=>{const [ai,aj]=areaOf(i,j),[bi,bj]=areaOf(ni,nj),[s0,t0]=areaStart(Math.max(ai,bi),Math.max(aj,bj));return Math.abs((ai!==bi?j-t0:i-s0)-(AREA_SIZE-1)/2);};
+ const plan=planGates([0,0],both,crossesArea,middle,roadGates);
+ areaGates=plan.gates;
+ walker.barrier=(i,j,ni,nj)=>mazeWalls.has(edgeKey(i,j,ni,nj))||(crossesArea(i,j,ni,nj)&&!areaGates.has(edgeKey(i,j,ni,nj)));
+ for(const k of plan.seen){const [i,j]=k.split(',').map(Number);if(watariCell(i,j))continue;const a=areaKey(i,j);if(!areaOrder.includes(a))areaOrder.push(a);}
+ // Hedges along every closed border (and the maze walls) where both sides are dry ground; folk-painted gate arches at gates.
+ const HEDGE=[hex('6d8c6a'),hex('78966f'),hex('668463'),hex('80a07a')],GATE=[hex('c9806e'),hex('6f8fb3'),hex('d1aa5a'),hex('8f7bb0'),hex('5f9a8a')];
+ const buckets=new Map(),bucketOf=(x,z)=>{const key=Math.floor(x/64)+','+Math.floor(z/64);let b=buckets.get(key);if(!b){b=[];buckets.set(key,b);}return b;};
+ const hedgeAt=(i,j,ni,nj,tall)=>{const [ax,az]=cellCentre(i,j),[bx,bz]=cellCentre(ni,nj),mx=(ax+bx)/2,mz=(az+bz)/2;if(!walkable(ax,az)||!walkable(bx,bz)||!walkable(mx,mz))return;bucketOf(mx,mz).push(['h',mx,mz,ax!==bx,tall,(i*7+j*13)&3]);};
+ const seenEdge=new Set();
+ for(const k of plan.seen){const [i,j]=k.split(',').map(Number);for(const [dx,dz] of HEADINGS){const ni=i+dx,nj=j+dz,e=edgeKey(Math.min(i,ni),Math.min(j,nj),Math.max(i,ni),Math.max(j,nj));if(seenEdge.has(e))continue;seenEdge.add(e);
+  if(crossesArea(i,j,ni,nj)){if(areaGates.has(edgeKey(i,j,ni,nj))){const [ax,az]=cellCentre(i,j),[bx,bz]=cellCentre(ni,nj);bucketOf((ax+bx)/2,(az+bz)/2).push(['g',(ax+bx)/2,(az+bz)/2,ax!==bx,0,(areaOrder.indexOf(areaKey(ni,nj))+areaOrder.indexOf(areaKey(i,j))+GATE.length*4)%GATE.length]);}else hedgeAt(i,j,ni,nj,true);}
+  else if(mazeWalls.has(edgeKey(i,j,ni,nj)))hedgeAt(i,j,ni,nj,false);}}
+ if(maze){const {i0,j0}=maze;for(let a=0;a<MAZE_W;a++)for(let b=0;b<MAZE_H;b++)for(const [dx,dz] of HEADINGS){const i=i0+a,j=j0+b,ni=i+dx,nj=j+dz,outside=ni<i0||nj<j0||ni>=i0+MAZE_W||nj>=j0+MAZE_H;if(outside&&mazeWalls.has(edgeKey(i,j,ni,nj))){const e=edgeKey(Math.min(i,ni),Math.min(j,nj),Math.max(i,ni),Math.max(j,nj));if(!seenEdge.has(e)){seenEdge.add(e);hedgeAt(i,j,ni,nj,false);}}}}
+ for(const [key,items] of buckets){
+  let cx=0,cz=0;
+  for(const [kind,x,z,acrossX,tall,v] of items){
+   cx+=x;cz+=z;
+   // acrossX: the two cells differ in x, so the hedge or gate runs north to south along the shared side.
+   const along=(t)=>acrossX?[x,z+t]:[x+t,z],H=tall?2.9:2.3;
+   if(kind==='h'){
+    for(const t of [-CELL/4,CELL/4]){const [px,pz]=along(t),y=height(px,pz);box(px,y-.4,pz,acrossX?.9:CELL/2+.06,H+.4,acrossX?CELL/2+.06:.9,HEDGE[(v+(t>0?1:0))&3]);sphere(px,y+H,pz,acrossX?.5:CELL/4,.32,acrossX?CELL/4:.5,HEDGE[(v+2)&3],7,3);}
+    if(v===1){const [px,pz]=along(CELL*.18),y=height(px,pz);sphere(px+(acrossX?.48:0),y+H*.6,pz+(acrossX?0:.48),.12,.12,.12,pal.pink,5,3);}
+   }else{
+    // A gate: two painted posts on the border line, a lintel with a carved band, and a small lantern; the path between is clear.
+    const col=GATE[v],y=height(x,z);
+    for(const t of [-CELL*.43,CELL*.43]){const [px,pz]=along(t);box(px,height(px,pz)-.2,pz,.42,3.6,.42,col);box(px,height(px,pz)+3.25,pz,.56,.22,.56,pal.cream);}
+    const [lx,lz]=along(0);box(lx,y+3.45,lz,acrossX?.5:CELL*.98,.32,acrossX?CELL*.98:.5,col);box(lx,y+3.77,lz,acrossX?.62:CELL*1.06,.14,acrossX?CELL*1.06:.62,pal.cream);
+    for(const t of [-CELL*.2,0,CELL*.2]){const [px,pz]=along(t);sphere(px,y+3.6,pz,.12,.12,.12,t===0?pal.cream:GATE[(v+2)%GATE.length],6,3);}
+    cone(lx,y+2.8,lz,.18,.12,.4,pal.cream,6);
+   }
+  }
+  sceneryBatch(cx/items.length,cz/items.length,64);
+ }
+ // The maze's centrepiece: a carved, painted folk pillar where its four middle cells meet, ringed with flowers.
+ if(maze){const {i0,j0}=maze,[ax,az]=cellCentre(i0+3,j0+3),x=ax+CELL/2,z=az+CELL/2,y=height(x,z);
+  const bands=[hex('c9806e'),pal.cream,hex('6f8fb3'),hex('d1aa5a'),pal.cream,hex('8f7bb0')];
+  bands.forEach((c,k)=>cone(x,y+k*.62,z,.38-k*.025,.36-k*.025,.62,c,8));
+  sphere(x,y+bands.length*.62+.3,z,.42,.36,.42,hex('d1aa5a'),8,4);
+  for(let k=0;k<4;k++){const a=k*Math.PI/2+.4;box(x+Math.cos(a)*.5,y+2.2,z+Math.sin(a)*.5,.5,.16,.16,k%2?hex('c9806e'):hex('6f8fb3'));}
+  for(let k=0;k<14;k++){const a=k/14*Math.PI*2,r=.95;sphere(x+Math.cos(a)*r,height(x+Math.cos(a)*r,z+Math.sin(a)*r)+.12,z+Math.sin(a)*r,.13,.1,.13,k%3?pal.pink:pal.cream,5,3);}
+  sceneryBatch(x,z,30);}
+}
 const camera={x:player.x,y:player.y,z:player.z,yaw:player.yaw};
 let previous={...camera},accumulator=0;
 function resetCameraHistory(){Object.assign(camera,{x:player.x,y:player.y,z:player.z,yaw:player.yaw});Object.assign(previous,camera);accumulator=0;}
@@ -855,7 +934,34 @@ function paintNotices(){
 }
 const announcedPlaces=new Set();
 // Regions (Issue #21): the sky and fog drift toward each place's colours, and its own music crossfades in.
-const regionTracker=new RegionTracker(),skyMood={low:new Float32Array(SHORE_REGION.sky[0]),high:new Float32Array(SHORE_REGION.sky[1]),fog:1,stars:0,clouds:0},announcedRegions=new Set();
+// D025: in grid travel each district has one piece and one sky, so crossing a gate changes the whole mood at once. The first
+// island is the first district and keeps the shore. A district holding a named place of the wider island takes that place's
+// music, sky and name; the others take the remaining pieces in the order they are reached. Watari keeps its own regions.
+const areaRegions=new Map();
+if(GRID_MODE){
+ const used=new Set(['shore']),sources=[...HOME_REGIONS,...FAR_REGIONS,FAR_ROAD],named=new Map();
+ for(const r of FAR_REGIONS){const [i,j]=cellIndex(r.x,r.z),k=areaKey(i,j);if(!named.has(k))named.set(k,r);}
+ const pool=[...FAR_REGIONS.map(r=>r.track),FAR_ROAD.track,...HOME_REGIONS.map(r=>r.track)].filter((t,n,a)=>a.indexOf(t)===n);
+ // Districts without a named place take these original names, in the order they are reached.
+ const DISTRICT_NAMES=['草笛の原','白い垣根の里','古い石垣の野','風見の小径','鈴蘭の窪地','灯りの並木','花冠の丘','織り布の村はずれ','木靴の道','はぐれ羊の原','糸杉の囲い','月見の段','苔の回廊','藍染めの野','麦わらの迷い道','鳥笛の林','砂糖菓子の丘','彩り石の庭','旅芸人の広場','時計草の垣','雲母の原','小人の柵','蜂蜜色の野','提灯の小径','万華鏡の野','羽根飾りの丘','紙風船の原','刺繍の小道','貝殻笛の浜','木彫りの並び','星草の囲い','綿毛の段','焼き物の里','風鈴の坂','麻糸の野','葡萄棚の路','鳩笛の原','色硝子の垣','麦星の丘','夢見草の野','銀鈴の小径','藁人形の畑','古時計の庭','花模様の坂'];
+ const count=new Map(),trackOf=new Map(),nearKeys=k=>{const [a,b]=k.split(',').map(Number);return [[a+1,b],[a-1,b],[a,b+1],[a,b-1]].map(([x,y])=>x+','+y);};
+ let unnamed=0;
+ areaOrder.forEach((key,n)=>{
+  if(key==='0,0'){areaRegions.set(key,SHORE_REGION);trackOf.set(key,'shore');return;}
+  const place=named.has(key)?named.get(key).name:DISTRICT_NAMES[unnamed++%DISTRICT_NAMES.length];
+  // No two neighbouring districts play the same piece, so crossing a gate always changes it: neighbours already given a
+  // piece, and named neighbours still waiting for theirs, are avoided. A named place keeps its own piece unless a neighbour
+  // already plays it (several named places once shared one); otherwise the first unused piece, else the least used.
+  const near=new Set(nearKeys(key).map(k=>trackOf.get(k)||named.get(k)?.track).filter(Boolean));
+  let track=named.get(key)?.track;
+  if(!track||nearKeys(key).some(k=>trackOf.get(k)===track)){const open=pool.filter(t=>!near.has(t));track=open.find(t=>!used.has(t))||open.sort((a,b)=>(count.get(a)||0)-(count.get(b)||0))[0]||pool[n%pool.length];}
+  used.add(track);trackOf.set(key,track);count.set(track,(count.get(track)||0)+1);
+  const src=named.get(key)||sources.find(r=>r.track===track);
+  areaRegions.set(key,{id:'area:'+key,area:n+1,name:'第'+(n+1)+'区　'+place,en:'AREA '+(n+1)+(named.has(key)?' · '+src.en:''),track,sky:src.sky});
+ });
+}
+const areaRegionAt=(x,z)=>{const [i,j]=cellIndex(x,z);return areaRegions.get(areaKey(i,j))||SHORE_REGION;};
+const regionTracker=new RegionTracker(GRID_MODE?.45:.7,GRID_MODE?(x,z,current)=>watariRegionAt(x,z,current)||areaRegionAt(x,z):undefined),skyMood={low:new Float32Array(SHORE_REGION.sky[0]),high:new Float32Array(SHORE_REGION.sky[1]),fog:1,stars:0,clouds:0},announcedRegions=new Set();
 let music=null;
 function updateRegion(dt){
  const entered=regionTracker.update(player.x,player.z,dt),region=regionTracker.current;
@@ -1006,7 +1112,7 @@ function finishPointer(e){
 addEventListener('pointerup',finishPointer,true);addEventListener('pointercancel',finishPointer,true);
 canvas.addEventListener('lostpointercapture',e=>{if(e.pointerId===(GRID_MODE?gridGesture.id:gestures.id))resetInput();});
 canvas.addEventListener('contextmenu',e=>e.preventDefault());
-const gameKeys=new Set(['KeyW','KeyA','KeyS','KeyD','KeyQ','KeyE','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','ShiftLeft','ShiftRight']);if(GRID_MODE){gameKeys.add('KeyM');gameKeys.add('KeyX');}
+const gameKeys=new Set(['KeyW','KeyA','KeyS','KeyD','KeyQ','KeyE','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','ShiftLeft','ShiftRight']);if(GRID_MODE){gameKeys.add('KeyM');gameKeys.add('KeyN');gameKeys.add('KeyX');}
 addEventListener('keydown',e=>{
  if(!started&&e.code==='Enter'){begin();return;}
  if(started&&e.code==='KeyH'&&!e.repeat){e.preventDefault();if(paused)closeBook();else openBook();return;}
@@ -1020,6 +1126,7 @@ addEventListener('keydown',e=>{
   keys.add(e.code);resumeAudio();
  }
  if(GRID_MODE&&started&&!paused&&e.code==='KeyM'&&!e.repeat){automapShown=!automapShown;automapKey=null;drawAutomap();}
+ if(GRID_MODE&&started&&!paused&&e.code==='KeyN'&&!e.repeat)toggleAutomapMode();
  if(e.code==='Escape')resetInput();
 });
 addEventListener('keyup',e=>{keys.delete(e.code);keyOrder=keyOrder.filter(k=>k!==e.code);settleInput();});
@@ -1132,27 +1239,30 @@ function updateFootsteps(distance,dt){
  footDistance+=distance;
  if(footDistance>=stride){footDistance%=stride;footstep(surfaceAt(player.x,player.z),speed);}
 }
-function holdClick(){
- holdClicks++;try{navigator.vibrate?.(8);}catch{}
- if(!audioCtx||audioCtx.state!=='running')return;
- const t=audioCtx.currentTime,o=audioCtx.createOscillator(),g=audioCtx.createGain();o.type='triangle';o.frequency.setValueAtTime(1900,t);o.frequency.exponentialRampToValueAtTime(900,t+.03);
- g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(.09,t+.002);g.gain.exponentialRampToValueAtTime(.0001,t+.05);o.connect(g);g.connect(master);o.start(t);o.stop(t+.06);o.onended=()=>{o.disconnect();g.disconnect();};
-}
+// The press-in is silent (D025): the zoom itself is the cue. A device that can vibrate still gives a faint tap.
+function holdClick(){holdClicks++;try{navigator.vibrate?.(8);}catch{}}
 function chime(){if(!audioCtx||audioCtx.state!=='running')return;for(const [i,f] of [523.25,783.99].entries()){const o=audioCtx.createOscillator(),g=audioCtx.createGain(),t=audioCtx.currentTime+i*.15;o.type='sine';o.frequency.value=f;g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(.035,t+.03);g.gain.exponentialRampToValueAtTime(.0001,t+2);o.connect(g);g.connect(master);o.start(t);o.stop(t+2);}}
 // A small hand-drawn automap of visited cells, as in a dungeon crawler. North is always up.
 const automap=document.querySelector('#automap'),automapCtx=automap?.getContext('2d');
 // Dark glass with pale visited cells, sand-coloured roads, walls where a step is blocked, islanders and a large
 // heading arrow. North is always up.
 const npcCells=npcs.map(n=>cellIndex(n.x,n.z));
+// D025: two map views. The district view (the default) shows the whole 20 x 20 district at once: its ground faintly, roads,
+// the cells you have walked brighter, its hedged border with the gates, the maze walls and you. A tap (or N) switches to the
+// close view of the cells around you, as before.
+let automapMode='area';const areaGround=new Map();
+function districtGround(i,j){const k=i+','+j;let v=areaGround.get(k);if(v===undefined){const [x,z]=cellCentre(i,j);v=walkable(x,z)?1:0;areaGround.set(k,v);}return v;}
 function drawAutomap(){
  if(!walker||!automapCtx)return;
- const key=walker.i+','+walker.j+','+walker.heading+','+Math.round(player.yaw*40)+','+walker.visited.size+','+automapShown+','+innerWidth+'x'+innerHeight;
+ const key=automapMode+','+walker.i+','+walker.j+','+walker.heading+','+Math.round(player.yaw*40)+','+walker.visited.size+','+automapShown+','+innerWidth+'x'+innerHeight;
  if(key===automapKey)return;automapKey=key;
  automap.hidden=!automapShown;if(!automapShown)return;
- const size=automap.clientWidth||148,ratio=Math.min(devicePixelRatio||1,2),radius=6,unit=size/(radius*2+1);
+ const size=automap.clientWidth||148,ratio=Math.min(devicePixelRatio||1,2);
  if(automap.width!==Math.round(size*ratio)){automap.width=automap.height=Math.round(size*ratio);}
  const c=automapCtx;c.setTransform(ratio,0,0,ratio,0,0);c.clearRect(0,0,size,size);
  c.fillStyle='rgba(38,58,52,.74)';c.fillRect(0,0,size,size);
+ if(automapMode==='area'){drawDistrict(c,size);return;}
+ const radius=6,unit=size/(radius*2+1);
  const near=(i,j)=>Math.abs(i-walker.i)<=radius&&Math.abs(j-walker.j)<=radius;
  for(const [di,dj] of automapCells(walker,radius)){
   const road=roadCells.has((walker.i+di)+','+(walker.j+dj));
@@ -1175,20 +1285,50 @@ function drawAutomap(){
   let seen=false;for(let dj=-1;dj<=1&&!seen;dj++)for(let di=-1;di<=1;di++)if(walker.visited.has((i+di)+','+(j+dj))){seen=true;break;}
   if(seen){c.beginPath();c.arc((i-walker.i+radius+.5)*unit,(j-walker.j+radius+.5)*unit,unit*.3,0,Math.PI*2);c.fill();}
  }
- const cx=(radius+.5)*unit,cy=(radius+.5)*unit;
- c.save();c.translate(cx,cy);c.rotate(-player.yaw);c.beginPath();c.moveTo(0,-unit*.78);c.lineTo(unit*.58,unit*.52);c.lineTo(0,unit*.22);c.lineTo(-unit*.58,unit*.52);c.closePath();
- c.fillStyle='#f6b26b';c.fill();c.lineWidth=1.5;c.strokeStyle='#263a34';c.stroke();c.restore();
+ drawArrow(c,(radius+.5)*unit,(radius+.5)*unit,unit);
  c.font='bold 11px sans-serif';c.textAlign='center';c.textBaseline='top';c.fillStyle='#f3f0e2';c.fillText('N',size/2,3);
  c.textAlign='left';c.fillText(HEADING_NAMES[walker.heading],5,3);
- automap.setAttribute('aria-label','地図：'+HEADING_NAMES[walker.heading]+'を向いています。歩いたマス '+walker.visited.size);
+ automap.setAttribute('aria-label','地図（近く）：'+HEADING_NAMES[walker.heading]+'を向いています。歩いたマス '+walker.visited.size+'。タップで区画全体の地図へ。');
 }
+function drawArrow(c,cx,cy,unit){
+ c.save();c.translate(cx,cy);c.rotate(-player.yaw);c.beginPath();c.moveTo(0,-unit*.78);c.lineTo(unit*.58,unit*.52);c.lineTo(0,unit*.22);c.lineTo(-unit*.58,unit*.52);c.closePath();
+ c.fillStyle='#f6b26b';c.fill();c.lineWidth=Math.max(1,unit*.18);c.strokeStyle='#263a34';c.stroke();c.restore();
+}
+function drawDistrict(c,size){
+ const [ai,aj]=areaOf(walker.i,walker.j),[i0,j0]=areaStart(ai,aj),pad=size*.06,unit=(size-pad*2)/AREA_SIZE,X=i=>pad+(i-i0)*unit,Y=j=>pad+(j-j0)*unit;
+ for(let j=j0;j<j0+AREA_SIZE;j++)for(let i=i0;i<i0+AREA_SIZE;i++){
+  if(!districtGround(i,j))continue;const k=i+','+j,seen=walker.visited.has(k),road=roadCells.has(k);
+  c.fillStyle=seen?(road?'#ecdcb0':'#d3e0cf'):(road?'rgba(232,214,168,.5)':'rgba(201,216,198,.3)');
+  c.fillRect(X(i)+.4,Y(j)+.4,unit-.8,unit-.8);
+ }
+ c.lineCap='round';c.strokeStyle='#f3efe0';c.lineWidth=Math.max(1,unit*.28);c.beginPath();
+ const side=(i,j,ni,nj)=>{const x=ni>i?X(i+1):ni<i?X(i):null,y=nj>j?Y(j+1):nj<j?Y(j):null;if(x!==null){c.moveTo(x,Y(j));c.lineTo(x,Y(j+1));}else{c.moveTo(X(i),y);c.lineTo(X(i+1),y);}};
+ // The district's own border (gates left open), and maze walls inside it.
+ for(let t=0;t<AREA_SIZE;t++)for(const [i,j,ni,nj] of [[i0+t,j0,i0+t,j0-1],[i0+t,j0+AREA_SIZE-1,i0+t,j0+AREA_SIZE],[i0,j0+t,i0-1,j0+t],[i0+AREA_SIZE-1,j0+t,i0+AREA_SIZE,j0+t]]){
+  if(!districtGround(i,j)||!districtGround(ni,nj)||watariCell(i,j)||watariCell(ni,nj)||areaGates.has(edgeKey(i,j,ni,nj)))continue;side(i,j,ni,nj);
+ }
+ for(const e of mazeWalls){const [a,b]=e.split('>'),[i,j]=a.split(',').map(Number),[ni,nj]=b.split(',').map(Number);if((i<ni||j<nj)&&areaKey(i,j)===areaKey(walker.i,walker.j)&&(walker.visited.has(i+','+j)||walker.visited.has(ni+','+nj)))side(i,j,ni,nj);}
+ c.stroke();
+ // Gates, as small bright marks on the border.
+ c.fillStyle='#f6b26b';
+ for(let t=0;t<AREA_SIZE;t++)for(const [i,j,ni,nj] of [[i0+t,j0,i0+t,j0-1],[i0+t,j0+AREA_SIZE-1,i0+t,j0+AREA_SIZE],[i0,j0+t,i0-1,j0+t],[i0+AREA_SIZE-1,j0+t,i0+AREA_SIZE,j0+t]]){
+  if(!areaGates.has(edgeKey(i,j,ni,nj)))continue;const x=(X(i)+X(ni))/2+unit/2,y=(Y(j)+Y(nj))/2+unit/2;c.beginPath();c.arc(x,y,Math.max(1.6,unit*.34),0,Math.PI*2);c.fill();
+ }
+ drawArrow(c,X(walker.i)+unit/2,Y(walker.j)+unit/2,Math.max(unit*1.15,3.2));
+ const region=areaRegions.get(ai+','+aj),n=region?.area||areaOrder.indexOf(ai+','+aj)+1;
+ c.font='bold 10px sans-serif';c.textBaseline='top';c.fillStyle='#f3f0e2';c.textAlign='left';c.fillText(n>0?'第'+n+'区':'区画外',4,2);c.textAlign='right';c.fillText('N',size-4,2);
+ automap.setAttribute('aria-label','地図（区画全体）：'+(n>0?'第'+n+'区':'区画外')+'、'+HEADING_NAMES[walker.heading]+'を向いています。タップで近くの地図へ。');
+}
+function toggleAutomapMode(){automapMode=automapMode==='area'?'near':'area';automapKey=null;drawAutomap();}
+if(automap){automap.addEventListener('pointerdown',e=>{e.preventDefault();e.stopPropagation();if(started&&!paused&&GRID_MODE)toggleAutomapMode();});automap.addEventListener('contextmenu',e=>e.preventDefault());}
+
 if(GRID_MODE){
  document.body.classList.add('grid-mode');
  {const label=document.querySelector('#open-book span');if(label)label.textContent='メニュー';}
- canvas.setAttribute('aria-label',canvas.getAttribute('aria-label').split('。')[0]+'。マス目を一つずつ歩きます。W/Sで一マス前後、A/Dで横へ一マス、Q/Eまたは左右矢印で90度向きを変え、Xで振り返ります。画面下半分では、上へはじくと一歩前へ（押したままで一歩ずつ進み続ける）、下へはじくと一歩後ろへ、左右へはじくとすぐに90度向きを変えます。画面のどこでも一度押し込むと、音とともに押した場所を中心に景色が大きくなり、そのまま左右へ滑らせると見渡せます（左右45度ほどまで）。向きは変わりません。歩く・向きを変えるのは画面の下半分だけです。カニ歩きは画面下の左右の隅にある薄いボタンで、まん中下のvで一マス後ろへ。メニューは左下、地図は右下です。軽く触れると一マス進みます。');
- const notes=document.querySelector('.notes p');if(notes)notes.innerHTML='マス目をひとつずつ歩く。下半分で<b>はじく</b>：上で一歩前へ（押したままで一歩ずつ進み続ける）、下で一歩後ろ、<b>左右ですぐに向きを変える</b>。<br>画面のどこでも<b>一度押し込む</b>と「カチッ」と押した場所を中心に拡大。<b>そのまま左右へ滑らせる</b>と見渡す（左右45度ほどまで、離すと正面へ）。<br>カニ歩きは左右の隅の薄いボタン、下のvで一歩後ろ。左下にメニュー、右下に地図。軽く触れると一マス。PCは W A S D · Q E · ← → · X。';
+ canvas.setAttribute('aria-label',canvas.getAttribute('aria-label').split('。')[0]+'。マス目を一つずつ歩きます。W/Sで一マス前後、A/Dで横へ一マス、Q/Eまたは左右矢印で90度向きを変え、Xで振り返ります。画面下半分では、上へはじくと一歩前へ（押したままで一歩ずつ進み続ける）、下へはじくと一歩後ろへ、左右へはじくとすぐに90度向きを変えます。画面のどこでも一度押し込むと、押した場所を中心に景色が静かに大きくなり、そのまま左右へ滑らせると見渡せます（左右45度ほどまで）。向きは変わりません。歩く・向きを変えるのは画面の下半分だけです。カニ歩きは画面下の左右の隅にある薄いボタンで、まん中下のvで一マス後ろへ。メニューは左下、地図は右下です。軽く触れると一マス進みます。');
+ const notes=document.querySelector('.notes p');if(notes)notes.innerHTML='マス目をひとつずつ歩く。下半分で<b>はじく</b>：上で一歩前へ（押したままで一歩ずつ進み続ける）、下で一歩後ろ、<b>左右ですぐに向きを変える</b>。<br>画面のどこでも<b>一度押し込む</b>と押した場所を中心に静かに拡大。<b>そのまま左右へ滑らせる</b>と見渡す（左右45度ほどまで、離すと正面へ）。<br>カニ歩きは左右の隅の薄いボタン、下のvで一歩後ろ。左下にメニュー、右下に地図。軽く触れると一マス。PCは W A S D · Q E · ← → · X。';
  const book=document.querySelector('.book-controls');
- if(book)book.innerHTML='<h3>マス目を歩く</h3><p><b>はじく＝一歩・向き替え</b><br>上：一歩前へ（押したままで一歩ずつ進み続ける）／下：一歩後ろへ<br>左右：はじいた瞬間に、なめらかに90度向きを変える<br><b>一度押し込む＝その場所へ寄る</b>（画面のどこでも）<br>「カチッ」と同時に、押した場所を中心に景色が大きくなります（押したところは指の下のまま）。<br><b>押したまま左右へ滑らせる＝見渡す</b><br>寄ったまま視線が指についてきて、左右45度ほどでやわらかく止まります（向きは変わりません）。離すと正面に戻ります。<br><b>カニ歩き</b>：画面下の左右の隅にある薄いボタン。押すたび一マス、押したままで続けて。<br><b>v</b>：画面下のまん中。押すたび一マス後ろへ。<br>スマホでは、左下にこのメニュー、右下に地図があります。右上の小さな矢印はいつも北を指します。<br>軽く触れると一マス進みます。</p><p class="keyboard-notes">PC：W / S で前後 ／ A / D で横へ一マス ／ Q E ・ ← → で向き替え ／ X で振り返る<br>Shift で早足 ／ M で地図 ／ H でしおり ／ Esc で入力解除</p>';
+ if(book)book.innerHTML='<h3>マス目を歩く</h3><p><b>はじく＝一歩・向き替え</b><br>上：一歩前へ（押したままで一歩ずつ進み続ける）／下：一歩後ろへ<br>左右：はじいた瞬間に、なめらかに90度向きを変える<br><b>一度押し込む＝その場所へ寄る</b>（画面のどこでも）<br>押した場所を中心に、景色が静かに大きくなります（押したところは指の下のまま）。そのまま、ゆっくりじっくり観察できます。<br><b>押したまま左右へ滑らせる＝見渡す</b><br>寄ったまま視線が指についてきて、左右45度ほどでやわらかく止まります（向きは変わりません）。離すと正面に戻ります。<br><b>カニ歩き</b>：画面下の左右の隅にある薄いボタン。押すたび一マス、押したままで続けて。<br><b>v</b>：画面下のまん中。押すたび一マス後ろへ。<br>スマホでは、左下にこのメニュー、右下に地図があります。右上の小さな矢印はいつも北を指します。<br><b>区画</b>：島は20×20マスの区画に分かれ、境は垣根、門をくぐると隣の区画へ。区画ごとに音楽と空が変わります。右下の地図は今いる区画の全体で、タップすると近くの地図に切り替わります。<br>軽く触れると一マス進みます。</p><p class="keyboard-notes">PC：W / S で前後 ／ A / D で横へ一マス ／ Q E ・ ← → で向き替え ／ X で振り返る<br>Shift で早足 ／ M で地図の表示 ／ N で地図の切り替え（区画全体・近く） ／ H でしおり ／ Esc で入力解除</p>';
 }
 // Side-step buttons (D016): pressing one is a step sideways; holding it walks on, one eased cell at a time. A press too
 // quick to act before release is queued, so it is never lost. They never take focus, so the walk is not interrupted.
@@ -1218,4 +1358,4 @@ canvas.addEventListener('webglcontextlost',()=>{
  const error=document.querySelector('#error');error.textContent='島を読み込めませんでした。ページを開き直してください。';error.hidden=false;
 });
 // Minimal diagnostic state for development; no interface is added during play.
-window.nagi={get release(){return document.querySelector('meta[name="nagi-release"]')?.content||'local'},get position(){return{x:player.x,z:player.z,yaw:player.yaw}},get camera(){return{...camera}},get turningRate(){return player.yawRate},get continuousRun(){return player.runSeconds},get surge(){return player.surge},get collisionChecks(){return collisionWorld.checks},get actualSpeed(){return player.actualSpeed},get blockedFor(){return player.blockedFor},get monuments(){return monuments.length},get renderedVertices(){return drawnVertices},get drawCalls(){return drawCalls},get started(){return started},get speed(){return Math.hypot(player.vx,player.vz)},get dragging(){return gestures.held},get fov(){return viewFov},get greetingDistance(){return lastGreetingDistance},get footsteps(){return footstepCount},get audioState(){return audioCtx?.state||'unavailable'},get footSurface(){return lastFootSurface},get worldVertices(){return terrain.count+roadChunks.reduce((n,b)=>n+b.count,0)+world.count+sea.count+scenery.reduce((n,b)=>n+b.count,0)+movingSails.reduce((n,b)=>n+b.count,0)+birdMesh.count},get places(){return [...shownPlaces]},get islanders(){return npcs.length},get greeted(){return npcs.reduce((a,n)=>a+n.index,0)},get region(){return regionTracker.current.id},get musicTrack(){return music?.trackId||null},get skyHorizon(){return [...skyMood.low]},get grid(){return walker?{compass:compassTurn,zoomAnchor:[...zoomAnchor],zoom:zoomScale(),look:lookYaw,holdClicks,cell:CELL,road:roadCells.has(walker.i+','+walker.j),i:walker.i,j:walker.j,heading:walker.heading,steps:walker.steps,turns:walker.turns,bumps:walker.bumps,visited:walker.visited.size,busy:walker.busy,automap:!automap.hidden}:null}};
+window.nagi={get release(){return document.querySelector('meta[name="nagi-release"]')?.content||'local'},get position(){return{x:player.x,z:player.z,yaw:player.yaw}},get camera(){return{...camera}},get turningRate(){return player.yawRate},get continuousRun(){return player.runSeconds},get surge(){return player.surge},get collisionChecks(){return collisionWorld.checks},get actualSpeed(){return player.actualSpeed},get blockedFor(){return player.blockedFor},get monuments(){return monuments.length},get renderedVertices(){return drawnVertices},get drawCalls(){return drawCalls},get started(){return started},get speed(){return Math.hypot(player.vx,player.vz)},get dragging(){return gestures.held},get fov(){return viewFov},get greetingDistance(){return lastGreetingDistance},get footsteps(){return footstepCount},get audioState(){return audioCtx?.state||'unavailable'},get footSurface(){return lastFootSurface},get worldVertices(){return terrain.count+roadChunks.reduce((n,b)=>n+b.count,0)+world.count+sea.count+scenery.reduce((n,b)=>n+b.count,0)+movingSails.reduce((n,b)=>n+b.count,0)+birdMesh.count},get places(){return [...shownPlaces]},get islanders(){return npcs.length},get greeted(){return npcs.reduce((a,n)=>a+n.index,0)},get region(){return regionTracker.current.id},get musicTrack(){return music?.trackId||null},get skyHorizon(){return [...skyMood.low]},get grid(){return walker?{held:gridGesture.held,map:automapMode,area:areaKey(walker.i,walker.j),areaNumber:(areaRegions.get(areaKey(walker.i,walker.j))?.area)||0,gates:areaGates.size,maze:maze?[maze.i0,maze.j0]:null,compass:compassTurn,zoomAnchor:[...zoomAnchor],zoom:zoomScale(),look:lookYaw,holdClicks,cell:CELL,road:roadCells.has(walker.i+','+walker.j),i:walker.i,j:walker.j,heading:walker.heading,steps:walker.steps,turns:walker.turns,bumps:walker.bumps,visited:walker.visited.size,busy:walker.busy,automap:!automap.hidden}:null}};
