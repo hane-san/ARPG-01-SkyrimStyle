@@ -39,6 +39,30 @@ export const WATARI_REGIONS=Object.freeze([
   polygon:[[236,-128],[280,-128],[280,-20],[240,-20],[222,-62],[241,-87]]}
 ]);
 export const REGIONS=Object.freeze([...HOME_REGIONS,...WATARI_REGIONS]);
+// The wider island beyond the first one (D024). Before, every step out there fell back to the shore theme, which then
+// seemed to play forever. Each named place now has its own sky and music (neighbours share a piece), and the long roads
+// between them have a walking piece of their own. These areas are quiet: the place names are already announced by the
+// landmarks themselves, so entering one only changes the music and the sky.
+export const FAR_REGIONS=Object.freeze([
+ {id:'farRing',name:'風環の丘',en:'THE WIND RING',x:-105,z:-245,r:55,track:'farRing',quiet:true,sky:[[.80,.85,.82],[.60,.73,.82]]},
+ {id:'farHarbour',name:'凪見の港町',en:'NAGIMI HARBOUR',x:-310,z:-335,r:65,track:'farHarbour',quiet:true,sky:[[.83,.84,.80],[.62,.74,.83]]},
+ {id:'farGorge',name:'重ね石の渓谷',en:'THE LAYERED GORGE',x:0,z:-390,r:60,track:'farGorge',quiet:true,sky:[[.76,.79,.78],[.56,.64,.70]]},
+ {id:'farFields',name:'ひかりの棚田',en:'THE TERRACED FIELDS',x:-225,z:-510,r:60,track:'farFields',quiet:true,sky:[[.86,.85,.74],[.66,.75,.79]]},
+ {id:'farPyramid',name:'空洞のピラミッド',en:'THE OPEN PYRAMID',x:-120,z:-580,r:55,track:'farPyramid',quiet:true,sky:[[.82,.76,.70],[.58,.60,.70]]},
+ {id:'farSphere',name:'岬の天球',en:'THE CELESTIAL SPHERE',x:0,z:-840,r:70,track:'farSphere',quiet:true,sky:[[.78,.80,.88],[.50,.60,.80]]},
+ {id:'farSpiral',name:'ねじれの庭',en:'THE SPIRAL GARDEN',x:175,z:-305,r:55,track:'farSpiral',quiet:true,sky:[[.82,.83,.86],[.62,.70,.84]]},
+ {id:'farQuarry',name:'白い石切り場',en:'THE WHITE QUARRY',x:315,z:-525,r:55,track:'farQuarry',quiet:true,sky:[[.87,.86,.82],[.66,.72,.78]]},
+ {id:'farCauseway',name:'潮を渡る石道',en:'THE SEA CAUSEWAY',x:430,z:-480,r:50,track:'farSalt',quiet:true,sky:[[.82,.88,.89],[.58,.74,.85]]},
+ {id:'farSalt',name:'水鏡の塩田',en:'THE MIRROR SALT FIELDS',x:590,z:-505,r:60,track:'farSalt',quiet:true,sky:[[.86,.89,.90],[.62,.77,.88]]},
+ {id:'farReeds',name:'葦と水路の庭',en:'THE REED GARDEN',x:735,z:-410,r:60,track:'farReeds',quiet:true,sky:[[.81,.86,.80],[.60,.74,.80]]},
+ {id:'farWindmill',name:'風車の丘',en:'THE WINDMILL HILL',x:910,z:-520,r:60,track:'farReeds',quiet:true,sky:[[.84,.85,.78],[.63,.74,.81]]},
+ {id:'farLight',name:'白灯台の岬',en:'THE WHITE LIGHTHOUSE',x:1110,z:-645,r:60,track:'farLight',quiet:true,sky:[[.84,.83,.80],[.56,.64,.78]]},
+ {id:'farLibrary',name:'海の図書室',en:'THE SEA LIBRARY',x:1075,z:-755,r:50,track:'farLight',quiet:true,sky:[[.80,.80,.84],[.54,.60,.76]]},
+ {id:'farStars',name:'星砂の環',en:'THE STARRY SAND',x:865,z:-850,r:60,track:'farLight',quiet:true,sky:[[.78,.80,.86],[.50,.58,.76]]}
+]);
+export const FAR_ROAD=Object.freeze({id:'farRoad',name:'遠い道',en:'THE LONG ROAD',track:'farRoad',quiet:true,sky:[[.80,.84,.82],[.62,.74,.81]]});
+// Beyond the first island and its northern lobes, and not on Watari.
+export const onWiderIsland=(x,z)=>z<-112||x>60;
 function polygonContains(x,z,points){
  let inside=false;
  for(let i=0,j=points.length-1;i<points.length;j=i++){
@@ -70,7 +94,11 @@ export function regionAt(x,z,current=null){
  const watari=watariRegionAt(x,z,current);if(watari)return watari;
  let best=null,score=1;
  for(const r of HOME_REGIONS){const s=Math.hypot(x-r.x,z-r.z)/(r.r*(r.id===current?1.15:1));if(s<score){score=s;best=r;}}
- return best||SHORE_REGION;
+ if(best)return best;
+ // The wider island: the nearest named place by the same rule, else the long road; the first island keeps the shore.
+ if(!onWiderIsland(x,z))return SHORE_REGION;
+ for(const r of FAR_REGIONS){const s=Math.hypot(x-r.x,z-r.z)/(r.r*(r.id===current?1.15:1));if(s<score){score=s;best=r;}}
+ return best||FAR_ROAD;
 }
 // A new region must hold for `delay` seconds before it takes over: crossing an edge back and forth never flickers.
 export class RegionTracker {
