@@ -186,9 +186,10 @@ export function keyCommand(code){return KEY_COMMANDS[code]||null;}
 // - A quick flick (a slide that starts within HOLD_SECONDS): up steps forward (held on, it walks on one eased cell at a
 //   time), down steps back once, left/right turn a quarter that way as soon as the slide is seen, smoothly, one per
 //   flick. Nothing waits for the finger to lift.
-// - A press-in (a still press of HOLD_SECONDS, which clicks) and then a sideways slide only moves the eyes: the view
-//   follows the finger (LOOK_PIXELS_PER_QUARTER per 90 degrees at first, easing into 45 degrees either way: a natural
-//   glance) and settles back on the heading when the finger lifts. Looking never turns. Held then up / down steps.
+// - A press-in (a still press of HOLD_SECONDS, which clicks) at once leans the view toward the spot under the finger
+//   and zooms in a little (D021). Keeping the finger down and sliding sideways then moves the eyes from there (the view
+//   follows the finger, LOOK_PIXELS_PER_QUARTER per 90 degrees at first, easing into 45 degrees either way: a natural
+//   glance). Lifting the finger settles the view back on the heading. Looking never turns. Held then up / down steps.
 // - Walking forward and then sliding sideways in the same touch looks too.
 // - Side-steps are not gestures: the page's two faint corner buttons do them.
 // A flick that lands while a step is still playing is kept and acted on next. A short still tap is one step forward.
@@ -200,16 +201,18 @@ export function swipeDirection(dx,dy){
 }
 export function swipeCommand(dx,dy,held=false){const d=swipeDirection(dx,dy);return d?(held?HELD:FLICK)[d]:null;}
 export class GridGesture {
- constructor(){this.contacts=new Set();this.id=null;this.origin=null;this.lookOrigin=0;this.x=0;this.started=0;this.command=null;this.careful=false;this.blocked=false;this.moved=false;this.segment=null;this.armed=false;this.taken=null;this.acted=false;this.looking=false;}
+ constructor(){this.contacts=new Set();this.id=null;this.origin=null;this.lookOrigin=0;this.x=0;this.started=0;this.command=null;this.careful=false;this.blocked=false;this.moved=false;this.segment=null;this.armed=false;this.taken=null;this.acted=false;this.looking=false;this.aim=0;}
  get held(){return this.id!==null;}
- clearOwner(){const id=this.id;this.id=null;this.origin=null;this.command=null;this.careful=false;this.moved=false;this.segment=null;this.armed=false;this.taken=null;this.acted=false;this.looking=false;return id;}
+ clearOwner(){const id=this.id;this.id=null;this.origin=null;this.command=null;this.careful=false;this.moved=false;this.segment=null;this.armed=false;this.aim=0;this.taken=null;this.acted=false;this.looking=false;return id;}
  // The command to act on now: a one-shot (a turn, the step back) is offered once per slide. Looking is not a command.
  available(){if(this.command==='look')return null;return this.command&&!(ONE_SHOT.has(this.command)&&this.taken===this.command)?this.command:null;}
  take(command){this.acted=true;if(ONE_SHOT.has(command))this.taken=command;}
  // How far the eyes have turned, in quarters (positive = right), always inside LOOK_LIMIT_QUARTERS either way.
  // A glance, not a turn (D017): it follows the finger one to one at first and then leans softly into the limit, like a
  // head turning as far as is comfortable, so it never reaches the next direction. Only a flick turns.
- get look(){if(!this.held||this.command!=='look')return 0;const q=(this.x-this.lookOrigin)/LOOK_PIXELS_PER_QUARTER;return LOOK_LIMIT_QUARTERS*Math.tanh(q/LOOK_LIMIT_QUARTERS);}
+ get look(){if(!this.glancing)return 0;const q=this.aim+(this.command==='look'?(this.x-this.lookOrigin)/LOOK_PIXELS_PER_QUARTER:0);return LOOK_LIMIT_QUARTERS*Math.tanh(q/LOOK_LIMIT_QUARTERS);}
+ // A glance is under way from the press-in click (still, or sliding sideways) until the finger lifts or starts to walk.
+ get glancing(){return this.held&&(this.command==='look'||(this.armed&&this.command===null));}
  reset(){const id=this.clearOwner();this.contacts.clear();this.blocked=false;return id;}
  begin(e,bounds,now){
   if(e.button>0)return false;
@@ -222,9 +225,10 @@ export class GridGesture {
   this.clearOwner();this.id=e.pointerId;this.origin={x:e.clientX,y:e.clientY};this.x=e.clientX;this.lookOrigin=e.clientX;this.started=now;return true;
  }
  // A still press that has lasted HOLD_SECONDS arms the held mode. Returns true once, when it arms (time to click).
- arm(now){
+ // aim: where the finger rests, as a look in quarters (the page measures it), so the glance leans toward that spot.
+ arm(now,aim=0){
   if(!this.held||this.armed||this.moved||this.command||now-this.started<HOLD_SECONDS)return false;
-  this.armed=true;return true;
+  this.armed=true;this.aim=aim;this.lookOrigin=this.x;return true;
  }
  move(e,now){
   if(e.pointerId!==this.id)return false;

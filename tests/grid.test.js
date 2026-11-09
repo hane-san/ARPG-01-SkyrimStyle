@@ -277,3 +277,18 @@ test('a quarter turn answers at once and still settles softly',()=>{
  let prev=w.yaw,last=0,over=false;while(w.action){w.update(dt);if(w.yaw<-Math.PI/2-1e-9)over=true;last=prev-w.yaw;prev=w.yaw;}
  assert.equal(over,false);assert.ok(last<.01,last);assert.equal(w.yaw,-Math.PI/2);
 });
+
+test('a press-in at once glances toward the pressed spot; holding on and sliding sideways looks on from there',()=>{
+ const g=new GridGesture(),b={top:0,height:800},touch=(id,x,y)=>({pointerId:id,pointerType:'touch',clientX:x,clientY:y,button:0,buttons:1,isPrimary:true});
+ // Before the click nothing glances; at the click the glance leans toward the spot under the finger (here right of centre).
+ g.begin(touch(1,300,600),b,0);assert.equal(g.glancing,false);assert.equal(g.look,0);
+ assert.equal(g.arm(HOLD_SECONDS+.01,.1),true);assert.equal(g.glancing,true);assert.ok(Math.abs(g.look-.1)<.01,g.look);
+ // Sliding sideways adds to that lean, within the same 45-degree limit; it never turns.
+ g.move(touch(1,300+LOOK_PIXELS_PER_QUARTER/5,600),HOLD_SECONDS+.1);assert.equal(g.command,'look');assert.ok(g.look>.25&&g.look<LOOK_LIMIT_QUARTERS,g.look);assert.equal(g.available(),null);
+ assert.equal(g.end(touch(1,330,600),1),true);assert.equal(g.glancing,false);assert.equal(g.look,0);
+ // Walking on after the click ends the glance: held then up steps forward with the view straight ahead.
+ g.begin(touch(2,100,600),b,0);g.arm(HOLD_SECONDS+.01,-.1);assert.ok(g.look<0);
+ g.move(touch(2,100,540),HOLD_SECONDS+.1);assert.equal(g.available(),'forward');assert.equal(g.glancing,false);assert.equal(g.look,0);g.end(touch(2,100,540),1);
+ // A quick flick never glances, even if a slow frame clicked first: the turn takes over.
+ g.begin(touch(3,200,600),b,0);g.arm(1,.05);g.move(touch(3,260,600),.05);assert.equal(g.available(),'turnRight');assert.equal(g.glancing,false);g.end(touch(3,260,600),.1);
+});
