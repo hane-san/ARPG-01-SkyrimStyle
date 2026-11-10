@@ -1153,6 +1153,8 @@ function resumeAudio(){
 function openBook(){
  if(!started||paused)return;
  paused=true;resetInput();notices.clear();paintNotices();suspendAudio();document.body.classList.add('reading');travelBook.showModal();
+ // The book always opens at its heading, whatever was scrolled to last time (D026).
+ travelBook.scrollTop=0;
 }
 function closeBook(){
  if(!paused)return;
@@ -1326,9 +1328,14 @@ if(GRID_MODE){
  document.body.classList.add('grid-mode');
  {const label=document.querySelector('#open-book span');if(label)label.textContent='メニュー';}
  canvas.setAttribute('aria-label',canvas.getAttribute('aria-label').split('。')[0]+'。マス目を一つずつ歩きます。W/Sで一マス前後、A/Dで横へ一マス、Q/Eまたは左右矢印で90度向きを変え、Xで振り返ります。画面下半分では、上へはじくと一歩前へ（押したままで一歩ずつ進み続ける）、下へはじくと一歩後ろへ、左右へはじくとすぐに90度向きを変えます。画面のどこでも一度押し込むと、押した場所を中心に景色が静かに大きくなり、そのまま左右へ滑らせると見渡せます（左右45度ほどまで）。向きは変わりません。歩く・向きを変えるのは画面の下半分だけです。カニ歩きは画面下の左右の隅にある薄いボタンで、まん中下のvで一マス後ろへ。メニューは左下、地図は右下です。軽く触れると一マス進みます。');
- const notes=document.querySelector('.notes p');if(notes)notes.innerHTML='マス目をひとつずつ歩く。下半分で<b>はじく</b>：上で一歩前へ（押したままで一歩ずつ進み続ける）、下で一歩後ろ、<b>左右ですぐに向きを変える</b>。<br>画面のどこでも<b>一度押し込む</b>と押した場所を中心に静かに拡大。<b>そのまま左右へ滑らせる</b>と見渡す（左右45度ほどまで、離すと正面へ）。<br>カニ歩きは左右の隅の薄いボタン、下のvで一歩後ろ。左下にメニュー、右下に地図。軽く触れると一マス。PCは W A S D · Q E · ← → · X。';
+ // The title keeps the essentials only (D026); the menu has the whole table.
+ const notes=document.querySelector('.notes p');if(notes)notes.innerHTML='マス目をひとつずつ歩く旅。<br><b>はじく</b>：上で前へ、下で後ろへ、左右で向きを変える。<br><b>押し込む</b>：その場所を拡大。そのまま滑らせて見渡す。<br>カニ歩き・メニュー・地図は画面の下に。';
+ // The menu's controls are a short table of gesture and result (D026): readable at a glance, short enough that the sound
+ // and subtitle switches stay in view on a phone. Keyboard notes show only where there is a keyboard.
  const book=document.querySelector('.book-controls');
- if(book)book.innerHTML='<h3>マス目を歩く</h3><p><b>はじく＝一歩・向き替え</b><br>上：一歩前へ（押したままで一歩ずつ進み続ける）／下：一歩後ろへ<br>左右：はじいた瞬間に、なめらかに90度向きを変える<br><b>一度押し込む＝その場所へ寄る</b>（画面のどこでも）<br>押した場所を中心に、景色が静かに大きくなります（押したところは指の下のまま）。そのまま、ゆっくりじっくり観察できます。<br><b>押したまま左右へ滑らせる＝見渡す</b><br>寄ったまま視線が指についてきて、左右45度ほどでやわらかく止まります（向きは変わりません）。離すと正面に戻ります。<br><b>カニ歩き</b>：画面下の左右の隅にある薄いボタン。押すたび一マス、押したままで続けて。<br><b>v</b>：画面下のまん中。押すたび一マス後ろへ。<br>スマホでは、左下にこのメニュー、右下に地図があります。右上の小さな矢印はいつも北を指します。<br><b>区画</b>：島は20×20マスの区画に分かれ、境は垣根、門をくぐると隣の区画へ。区画ごとに音楽と空が変わります。右下の地図は今いる区画の全体で、タップすると近くの地図に切り替わります。<br>軽く触れると一マス進みます。</p><p class="keyboard-notes">PC：W / S で前後 ／ A / D で横へ一マス ／ Q E ・ ← → で向き替え ／ X で振り返る<br>Shift で早足 ／ M で地図の表示 ／ N で地図の切り替え（区画全体・近く） ／ H でしおり ／ Esc で入力解除</p>';
+ if(book)book.innerHTML='<h3>マス目を歩く</h3><dl class="moves">'
+  +[['上へはじく','一歩前へ（押したままで続く）'],['下へはじく・<b>v</b>','一歩後ろへ'],['左右へはじく','向きを変える'],['<b>‹ ›</b>','カニ歩き（押したままで続く）'],['押し込む','その場所を拡大'],['押したまま左右へ','見渡す（45度ほどまで）'],['地図をタップ','区画全体 ⇄ 近く'],['軽く触れる','一歩前へ']].map(([k,v])=>'<div><dt>'+k+'</dt><dd>'+v+'</dd></div>').join('')
+  +'</dl><p class="district-note">島は20×20マスの区画に分かれ、境は垣根。門をくぐると音楽と空が変わります。右上の矢印は北。</p><p class="keyboard-notes">PC：W / S で前後 ／ A / D で横へ一マス ／ Q E ・ ← → で向き替え ／ X で振り返る<br>Shift で早足 ／ M で地図の表示 ／ N で地図の切り替え ／ H でしおり ／ Esc で入力解除</p>';
 }
 // Side-step buttons (D016): pressing one is a step sideways; holding it walks on, one eased cell at a time. A press too
 // quick to act before release is queued, so it is never lost. They never take focus, so the walk is not interrupted.
