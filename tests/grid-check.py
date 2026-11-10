@@ -57,6 +57,13 @@ def cell(page):
  return round(i),round(j)
 HEADINGS=[(0,-1),(1,0),(0,1),(-1,0)]
 OFFSET={'w':0,'d':1,'s':2,'a':3}
+def turn_key(page,key):
+ """Press a turning key and wait for the turn to begin before settling: on a slow, loaded renderer no frame may run for a
+ while, and settle() would otherwise see an idle walker before the press was handled. The outcome is asserted by the caller."""
+ turns=page.evaluate('nagi.grid.turns');page.keyboard.press(key)
+ try:page.wait_for_function(f'nagi.grid.turns>{turns}',timeout=15000)
+ except Exception:pass
+ settle(page)
 def expect_step(page,key):
  """Press a movement key once: one cell if the edge is open, otherwise a bump that neither moves nor sounds."""
  i,j=cell(page);h=page.evaluate('nagi.grid.heading');dx,dz=HEADINGS[(h+OFFSET[key])%4]
@@ -109,7 +116,7 @@ with sync_playwright() as pw:
  for turn in range(4):
   i,j=cell(page);h=page.evaluate('nagi.grid.heading');dx,dz=HEADINGS[h]
   if page.evaluate('([a,b,c,d])=>_gridQA.canStep(a,b,c,d)',[i,j,i+dx,j+dz]):break
-  page.keyboard.press('e');settle(page)
+  turn_key(page,'e')
  else:raise AssertionError('no open cell beside the landing')
  assert expect_step(page,'w')
  # Then, on the nearest straight stretch of four open cells, single presses, a held glide and its stop.
@@ -122,10 +129,10 @@ with sync_playwright() as pw:
  assert cell(page)==(i+dx*held,j+dz*held)
  p=page.evaluate('nagi.position');page.wait_for_timeout(600);assert page.evaluate('nagi.position')==p
  # Quarter turns keep the cell; side-steps and the backward step keep the heading.
- page.keyboard.press('e');settle(page);assert page.evaluate('nagi.grid.heading')==(h+1)%4 and cell(page)==(i+dx*held,j+dz*held)
+ turn_key(page,'e');assert page.evaluate('nagi.grid.heading')==(h+1)%4 and cell(page)==(i+dx*held,j+dz*held)
  for key in ['d','a','s','w']:expect_step(page,key)
  assert page.evaluate('nagi.grid.heading')==(h+1)%4
- page.keyboard.press('ArrowLeft');settle(page);assert page.evaluate('nagi.grid.heading')==h
+ turn_key(page,'ArrowLeft');assert page.evaluate('nagi.grid.heading')==h
  # The drawn view never jumps while turning, including through north (a full-circle snap flashed one wrong frame).
  page.evaluate("window._yaws=[];(function sample(){_yaws.push(nagi.camera.yaw);if(_yaws.length<100000)requestAnimationFrame(sample);})()")
  turns0=page.evaluate('nagi.grid.turns')
