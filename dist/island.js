@@ -1153,6 +1153,8 @@ function resumeAudio(){
 function openBook(){
  if(!started||paused)return;
  paused=true;resetInput();notices.clear();paintNotices();suspendAudio();document.body.classList.add('reading');travelBook.showModal();
+ // The book always opens at its heading, whatever was scrolled to last time (D026).
+ travelBook.scrollTop=0;
 }
 function closeBook(){
  if(!paused)return;
