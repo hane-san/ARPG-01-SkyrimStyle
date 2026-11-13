@@ -298,7 +298,7 @@ with sync_playwright() as pw:
  assert all(boxes.values()),boxes
  xs=[boxes[k]['x'] for k in ['#side-left','#open-book','#step-back','#automap','#side-right']];assert xs==sorted(xs),boxes
  for k,b in boxes.items():assert b['y']>844*.8 and b['y']+b['height']<=844,(k,b)
- assert 100<=boxes['#automap']['width']<=124 and boxes['#automap']['x']+boxes['#automap']['width']>390*.6,boxes['#automap']
+ assert 120<=boxes['#automap']['width']<=136 and boxes['#automap']['x']+boxes['#automap']['width']>390*.6,boxes['#automap']
  assert boxes['#open-book']['x']<390*.4 and 'メニュー' in mobile.locator('#open-book').inner_text()
  overlaps=lambda a,b:min(a['x']+a['width'],b['x']+b['width'])-max(a['x'],b['x'])>0 and min(a['y']+a['height'],b['y']+b['height'])-max(a['y'],b['y'])>0
  names=list(boxes);assert not [(a,b) for i,a in enumerate(names) for b in names[i+1:] if overlaps(boxes[a],boxes[b])],boxes
