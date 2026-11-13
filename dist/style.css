@@ -178,3 +178,16 @@ button:focus-visible{outline:2px solid #385e4b;outline-offset:4px}
 .grid-mode .notes small{font-size:10.5px}
 @media(max-width:360px){.grid-mode .notes{font-size:11px;line-height:1.7}.book-controls .moves>div{grid-template-columns:8.2em 1fr;gap:8px}.book-controls .moves dt,.book-controls .moves dd{font-size:12px}}
 @media(max-height:600px) and (orientation:landscape){.grid-mode .notes{font-size:10.5px;line-height:1.65}.book-controls .moves>div{padding:4px 0}}
+
+/* D027: a slightly larger map (112 -> 128 px on phones, 148 -> 164 px on a desktop). The bar keeps its order
+   < メニュー v [map] >, and the space to the left of the map, above メニュー and v, is kept free for the menu and,
+   later, the traveller's status such as HP. The narrow-screen sizes come last so they really apply. */
+#automap{width:164px;height:164px}
+#compass{right:calc(max(4vw,var(--safe-right)) + 176px)}
+.grid-mode.touch-ui #automap{width:128px;height:128px}
+.grid-mode.touch-ui #step-back{left:calc(max(3vw,var(--safe-left)) + 132px);width:48px}
+@media(max-height:600px) and (orientation:landscape){#automap{width:128px;height:128px}}
+@media(max-width:360px){
+ .grid-mode.touch-ui #automap{width:100px;height:100px}
+ .grid-mode.touch-ui #step-back{left:calc(max(3vw,var(--safe-left)) + 100px);width:44px}
+}

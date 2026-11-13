@@ -189,6 +189,19 @@ button:focus-visible{outline:2px solid #385e4b;outline-offset:4px}
 @media(max-width:360px){.grid-mode .notes{font-size:11px;line-height:1.7}.book-controls .moves>div{grid-template-columns:8.2em 1fr;gap:8px}.book-controls .moves dt,.book-controls .moves dd{font-size:12px}}
 @media(max-height:600px) and (orientation:landscape){.grid-mode .notes{font-size:10.5px;line-height:1.65}.book-controls .moves>div{padding:4px 0}}
 
+/* D027: a slightly larger map (112 -> 128 px on phones, 148 -> 164 px on a desktop). The bar keeps its order
+   < メニュー v [map] >, and the space to the left of the map, above メニュー and v, is kept free for the menu and,
+   later, the traveller's status such as HP. The narrow-screen sizes come last so they really apply. */
+#automap{width:164px;height:164px}
+#compass{right:calc(max(4vw,var(--safe-right)) + 176px)}
+.grid-mode.touch-ui #automap{width:128px;height:128px}
+.grid-mode.touch-ui #step-back{left:calc(max(3vw,var(--safe-left)) + 132px);width:48px}
+@media(max-height:600px) and (orientation:landscape){#automap{width:128px;height:128px}}
+@media(max-width:360px){
+ .grid-mode.touch-ui #automap{width:100px;height:100px}
+ .grid-mode.touch-ui #step-back{left:calc(max(3vw,var(--safe-left)) + 100px);width:44px}
+}
+
 </style></head>
 <body>
 <canvas id="world" tabindex="0" aria-label="凪の島。WASDで移動、左右矢印で旋回。画面下半分で一本指を置き、上で前進、下で後退、左右で旋回します。離すと停止します。"></canvas>
@@ -1716,6 +1729,20 @@ const LOOK_FOV=48;let viewFov=CAMERA_FOV;
 // The zoom magnifies around the pressed spot itself (D024), like a pinch: that spot stays under the finger while the
 // scene grows around it. zoomAnchor is the spot in normalised device coordinates (x right, y up).
 const zoomAnchor=[0,0];const zoomScale=()=>Math.tan(CAMERA_FOV*Math.PI/360)/Math.tan(viewFov*Math.PI/360);
+// D027: the zoom moves like a slow lens rather than a snap. Its amount is a critically damped spring on the logarithm of
+// the magnification, so it starts from rest, gathers gently and settles without overshoot, and a release mid-way turns
+// back smoothly. The view's own anchor follows the pressed spot; it only glides when a new press lands mid-zoom.
+const ZOOM_MAX=Math.tan(CAMERA_FOV*Math.PI/360)/Math.tan(LOOK_FOV*Math.PI/360),ZOOM_IN_RATE=4.2,ZOOM_OUT_RATE=5.4;
+let zoomLevel=0,zoomSpeed=0;const viewAnchor=[0,0];
+function updateZoom(dt,looking){
+ const target=looking?1:0,w=looking?ZOOM_IN_RATE:ZOOM_OUT_RATE,e=zoomLevel-target,decay=Math.exp(-w*dt),carry=zoomSpeed+w*e;
+ zoomLevel=target+(e+carry*dt)*decay;zoomSpeed=(zoomSpeed-carry*w*dt)*decay;
+ if(zoomLevel<0){zoomLevel=0;zoomSpeed=Math.max(0,zoomSpeed);}if(zoomLevel>1){zoomLevel=1;zoomSpeed=Math.min(0,zoomSpeed);}
+ if(!looking&&zoomLevel<1e-3&&Math.abs(zoomSpeed)<.02){zoomLevel=0;zoomSpeed=0;}
+ if(zoomLevel<.02){viewAnchor[0]=zoomAnchor[0];viewAnchor[1]=zoomAnchor[1];}
+ else{const a=1-Math.exp(-dt*5);viewAnchor[0]+=(zoomAnchor[0]-viewAnchor[0])*a;viewAnchor[1]+=(zoomAnchor[1]-viewAnchor[1])*a;}
+ viewFov=zoomLevel===0?CAMERA_FOV:Math.atan(Math.tan(CAMERA_FOV*Math.PI/360)/ZOOM_MAX**zoomLevel)*360/Math.PI;
+}
 // Portrait grid travel lifts the horizon a little (a lens shift, D023): the view keeps its 68 degrees but shows more of
 // the land ahead and less empty sky, above the bottom bar. Free walking and landscape screens keep a centred horizon.
 const portraitShift=()=>GRID_MODE?clamp((canvas.height/canvas.width-1)*.14,0,.16):0;
@@ -2394,7 +2421,7 @@ const notices=new JourneyNotices(),seenScenes=new Set(),sceneDwell=new Map();
 const placeNode=document.querySelector('#place'),greetingNode=document.querySelector('#greeting'),travelBook=document.querySelector('#travel-book');
 let noticeContent=null,paintedNotice=null,previousMovement=false,stillFor=1;
 function resize(){const d=Math.min(devicePixelRatio||1,1.5),w=Math.round(innerWidth*d),h=Math.round(innerHeight*d);if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;gl.viewport(0,0,w,h);}}addEventListener('resize',resize);resize();
-function vp(){const k=zoomScale(),f=k/Math.tan(CAMERA_FOV*Math.PI/360),aspect=canvas.width/canvas.height,n=CAMERA_NEAR,far=2600,proj=[f/aspect,0,0,0,0,f,0,0,-zoomAnchor[0]*(1-k),-(k*portraitShift()+zoomAnchor[1]*(1-k)),(far+n)/(n-far),-1,0,0,2*far*n/(n-far),0];const c=Math.cos(camera.yaw),s=Math.sin(camera.yaw),view=[c,0,s,0,0,1,0,0,-s,0,c,0,-c*camera.x+s*camera.z,-camera.y,-s*camera.x-c*camera.z,1],out=new Float32Array(16);for(let j=0;j<4;j++)for(let i=0;i<4;i++){let v=0;for(let k=0;k<4;k++)v+=proj[k*4+i]*view[j*4+k];out[j*4+i]=v;}return out;}
+function vp(){const k=zoomScale(),f=k/Math.tan(CAMERA_FOV*Math.PI/360),aspect=canvas.width/canvas.height,n=CAMERA_NEAR,far=2600,proj=[f/aspect,0,0,0,0,f,0,0,-viewAnchor[0]*(1-k),-(k*portraitShift()+viewAnchor[1]*(1-k)),(far+n)/(n-far),-1,0,0,2*far*n/(n-far),0];const c=Math.cos(camera.yaw),s=Math.sin(camera.yaw),view=[c,0,s,0,0,1,0,0,-s,0,c,0,-c*camera.x+s*camera.z,-camera.y,-s*camera.x-c*camera.z,1],out=new Float32Array(16);for(let j=0;j<4;j++)for(let i=0;i<4;i++){let v=0;for(let k=0;k<4;k++)v+=proj[k*4+i]*view[j*4+k];out[j*4+i]=v;}return out;}
 const DRAW_ORIGIN=[0,0,0],WORLD_SCENERY_BOUNDS={x:0,z:-25,r:100},CAMERA_AXES=['x','y','z','yaw'];
 let drawnVertices=0,drawCalls=0,viewCos=1,viewSin=0,viewTangent=1,viewPadding=1;
 function draw(b,offset=DRAW_ORIGIN,yaw=0,water=0,roll=0){gl.bindBuffer(gl.ARRAY_BUFFER,b.buffer);for(let i=0;i<3;i++){gl.enableVertexAttribArray(attrs[i]);gl.vertexAttribPointer(attrs[i],3,gl.FLOAT,false,36,i*12);}gl.uniform3fv(loc.uOffset,offset);gl.uniform1f(loc.uYaw,yaw);gl.uniform1f(loc.uRoll,roll);gl.uniform1f(loc.uWater,water);gl.drawArrays(gl.TRIANGLES,0,b.count);drawnVertices+=b.count;drawCalls++;}
@@ -2406,7 +2433,7 @@ function visible(b,range=1450){
 function render(){
  viewCos=Math.cos(camera.yaw);viewSin=Math.sin(camera.yaw);viewTangent=Math.tan(CAMERA_FOV*Math.PI/360)*canvas.width/canvas.height;viewPadding=Math.hypot(1,viewTangent);
  drawnVertices=0;drawCalls=0;gl.disable(gl.DEPTH_TEST);gl.useProgram(skyProg);gl.bindBuffer(gl.ARRAY_BUFFER,skyBuf);const a=gl.getAttribLocation(skyProg,'a');gl.enableVertexAttribArray(a);gl.vertexAttribPointer(a,2,gl.FLOAT,false,0,0);
- gl.uniform1f(skyLoc.yaw,camera.yaw);gl.uniform1f(skyLoc.aspect,canvas.width/canvas.height);gl.uniform1f(skyLoc.tanHalfFov,Math.tan(CAMERA_FOV*Math.PI/360));gl.uniform1f(skyLoc.skyShift,portraitShift());gl.uniform1f(skyLoc.skyZoom,zoomScale());gl.uniform2f(skyLoc.skyAnchor,zoomAnchor[0],zoomAnchor[1]);gl.uniform3fv(skyLoc.moonDirection,MOON_DIRECTION);gl.uniform3fv(skyLoc.skyLow,skyMood.low);gl.uniform3fv(skyLoc.skyHigh,skyMood.high);gl.uniform1f(skyLoc.skyStars,skyMood.stars);gl.uniform1f(skyLoc.skyClouds,skyMood.clouds);gl.drawArrays(gl.TRIANGLES,0,3);
+ gl.uniform1f(skyLoc.yaw,camera.yaw);gl.uniform1f(skyLoc.aspect,canvas.width/canvas.height);gl.uniform1f(skyLoc.tanHalfFov,Math.tan(CAMERA_FOV*Math.PI/360));gl.uniform1f(skyLoc.skyShift,portraitShift());gl.uniform1f(skyLoc.skyZoom,zoomScale());gl.uniform2f(skyLoc.skyAnchor,viewAnchor[0],viewAnchor[1]);gl.uniform3fv(skyLoc.moonDirection,MOON_DIRECTION);gl.uniform3fv(skyLoc.skyLow,skyMood.low);gl.uniform3fv(skyLoc.skyHigh,skyMood.high);gl.uniform1f(skyLoc.skyStars,skyMood.stars);gl.uniform1f(skyLoc.skyClouds,skyMood.clouds);gl.drawArrays(gl.TRIANGLES,0,3);
  gl.enable(gl.DEPTH_TEST);gl.clear(gl.DEPTH_BUFFER_BIT);gl.useProgram(prog);gl.uniformMatrix4fv(loc.uVP,false,vp());gl.uniform3f(loc.uEye,camera.x,camera.y,camera.z);gl.uniform1f(loc.uTime,reduced?0:time);gl.uniform3fv(loc.uFog,skyMood.low);
  // The far snow ridge keeps its shape through a thinner haze; everything else uses the ordinary fog.
  gl.uniform1f(loc.uFogScale,.32);draw(mountains);gl.uniform1f(loc.uFogScale,skyMood.fog);
@@ -2499,7 +2526,7 @@ function gridUpdate(dt){
  // Settled means settled: the easing would otherwise creep toward zero forever.
  if(!looking&&Math.abs(lookYaw)<1e-4)lookYaw=0;
  // The glance leans a little into the distance, and eases back out when the finger lifts.
- viewFov+=((looking?LOOK_FOV:CAMERA_FOV)-viewFov)*(1-Math.exp(-dt*(looking?5:4)));if(!looking&&Math.abs(viewFov-CAMERA_FOV)<1e-3)viewFov=CAMERA_FOV;
+ updateZoom(dt,looking);
  const held=heldCommand();
  // Letting go (or changing direction) mid-step slows to a stop on the cell being entered.
  if(held!==activeCommand)walker.easeOut();
@@ -2760,6 +2787,10 @@ const npcCells=npcs.map(n=>cellIndex(n.x,n.z));
 // close view of the cells around you, as before.
 let automapMode='area';const areaGround=new Map();
 function districtGround(i,j){const k=i+','+j;let v=areaGround.get(k);if(v===undefined){const [x,z]=cellCentre(i,j);v=walkable(x,z)?1:0;areaGround.set(k,v);}return v;}
+// D027: the map is drawn as one calm surface. Cells meet on whole device pixels, so no seams or stray lines run between
+// them; roads are drawn as continuous paths; hedges are soft green rather than bright white; and the labels sit in their
+// own strip along the top, so no border or gate ever runs through the text.
+const MAP_HEAD=18;
 function drawAutomap(){
  if(!walker||!automapCtx)return;
  const key=automapMode+','+walker.i+','+walker.j+','+walker.heading+','+Math.round(player.yaw*40)+','+walker.visited.size+','+automapShown+','+innerWidth+'x'+innerHeight;
@@ -2769,62 +2800,80 @@ function drawAutomap(){
  if(automap.width!==Math.round(size*ratio)){automap.width=automap.height=Math.round(size*ratio);}
  const c=automapCtx;c.setTransform(ratio,0,0,ratio,0,0);c.clearRect(0,0,size,size);
  c.fillStyle='rgba(38,58,52,.74)';c.fillRect(0,0,size,size);
- if(automapMode==='area'){drawDistrict(c,size);return;}
- const radius=6,unit=size/(radius*2+1);
- const near=(i,j)=>Math.abs(i-walker.i)<=radius&&Math.abs(j-walker.j)<=radius;
- for(const [di,dj] of automapCells(walker,radius)){
-  const road=roadCells.has((walker.i+di)+','+(walker.j+dj));
-  c.fillStyle=road?'#e8d6a8':'#c9d8c6';c.fillRect((di+radius)*unit+.75,(dj+radius)*unit+.75,unit-1.5,unit-1.5);
+ const w=size-14,h=size-MAP_HEAD-7,box=Math.min(w,h),frame={c,size,ratio,ox:7+(w-box)/2,oy:MAP_HEAD+(h-box)/2,box};
+ if(automapMode==='area'){drawDistrict(frame);return;}
+ const radius=5,unit=box/(radius*2+1),i0=walker.i-radius,j0=walker.j-radius,n=radius*2+1;
+ const snap=v=>Math.round(v*ratio)/ratio,X=i=>snap(frame.ox+(i-i0)*unit),Y=j=>snap(frame.oy+(j-j0)*unit);
+ // The ground around you shows faintly; the cells you have walked are brighter.
+ for(let j=j0;j<j0+n;j++)for(let i=i0;i<i0+n;i++){
+  if(!districtGround(i,j))continue;c.fillStyle=walker.visited.has(i+','+j)?'rgba(207,220,203,.9)':'rgba(201,216,198,.18)';c.fillRect(X(i),Y(j),X(i+1)-X(i),Y(j+1)-Y(j));
  }
+ drawRoads(c,i0,j0,n,X,Y,unit,unit*.42);
  // Walls, as in a dungeon map: a line on each side of a visited cell that cannot be stepped through.
- c.strokeStyle='#f3efe0';c.lineWidth=2;c.lineCap='round';c.beginPath();
+ c.strokeStyle='#f3efe0';c.lineWidth=Math.max(1.5,unit*.16);c.lineCap='round';c.beginPath();
  for(const [di,dj] of automapCells(walker,radius)){
-  const i=walker.i+di,j=walker.j+dj,x0=(di+radius)*unit,y0=(dj+radius)*unit;
-  if(!walker.canStep(i,j,i,j-1)){c.moveTo(x0+1,y0+1);c.lineTo(x0+unit-1,y0+1);}
-  if(!walker.canStep(i,j,i+1,j)){c.moveTo(x0+unit-1,y0+1);c.lineTo(x0+unit-1,y0+unit-1);}
-  if(!walker.canStep(i,j,i,j+1)){c.moveTo(x0+1,y0+unit-1);c.lineTo(x0+unit-1,y0+unit-1);}
-  if(!walker.canStep(i,j,i-1,j)){c.moveTo(x0+1,y0+1);c.lineTo(x0+1,y0+unit-1);}
+  const i=walker.i+di,j=walker.j+dj,x0=X(i),y0=Y(j),x1=X(i+1),y1=Y(j+1);
+  if(!walker.canStep(i,j,i,j-1)){c.moveTo(x0,y0);c.lineTo(x1,y0);}
+  if(!walker.canStep(i,j,i+1,j)){c.moveTo(x1,y0);c.lineTo(x1,y1);}
+  if(!walker.canStep(i,j,i,j+1)){c.moveTo(x0,y1);c.lineTo(x1,y1);}
+  if(!walker.canStep(i,j,i-1,j)){c.moveTo(x0,y0);c.lineTo(x0,y1);}
  }
  c.stroke();
  // Islanders appear once a visited cell touches theirs.
  c.fillStyle='#d98aa7';
  for(const [i,j] of npcCells){
-  if(!near(i,j))continue;
+  if(i<i0||j<j0||i>=i0+n||j>=j0+n)continue;
   let seen=false;for(let dj=-1;dj<=1&&!seen;dj++)for(let di=-1;di<=1;di++)if(walker.visited.has((i+di)+','+(j+dj))){seen=true;break;}
-  if(seen){c.beginPath();c.arc((i-walker.i+radius+.5)*unit,(j-walker.j+radius+.5)*unit,unit*.3,0,Math.PI*2);c.fill();}
+  if(seen){c.beginPath();c.arc(X(i)+unit/2,Y(j)+unit/2,unit*.28,0,Math.PI*2);c.fill();}
  }
- drawArrow(c,(radius+.5)*unit,(radius+.5)*unit,unit);
- c.font='bold 11px sans-serif';c.textAlign='center';c.textBaseline='top';c.fillStyle='#f3f0e2';c.fillText('N',size/2,3);
- c.textAlign='left';c.fillText(HEADING_NAMES[walker.heading],5,3);
+ drawArrow(c,X(walker.i)+unit/2,Y(walker.j)+unit/2,unit*.9);
+ mapHeader(c,size,HEADING_NAMES[walker.heading]+'向き · 近く');
  automap.setAttribute('aria-label','地図（近く）：'+HEADING_NAMES[walker.heading]+'を向いています。歩いたマス '+walker.visited.size+'。タップで区画全体の地図へ。');
+}
+// Roads as paths: each road cell joins its road neighbours centre to centre, faint where unwalked and bright where walked.
+function drawRoads(c,i0,j0,n,X,Y,unit,width){
+ const road=(i,j)=>roadCells.has(i+','+j),seen=(i,j)=>walker.visited.has(i+','+j),mid=(i,j)=>[X(i)+(X(i+1)-X(i))/2,Y(j)+(Y(j+1)-Y(j))/2];
+ c.lineCap='round';c.lineJoin='round';c.lineWidth=width;
+ for(const bright of [false,true]){
+  c.strokeStyle=bright?'#ecdcb0':'rgba(232,214,168,.42)';c.fillStyle=c.strokeStyle;c.beginPath();
+  for(let j=j0;j<j0+n;j++)for(let i=i0;i<i0+n;i++){
+   if(!road(i,j)||(bright&&!seen(i,j)))continue;const [x,y]=mid(i,j);let joined=false;
+   for(const [ni,nj] of [[i+1,j],[i,j+1]]){if(ni>=i0+n||nj>=j0+n||!road(ni,nj)||(bright&&!seen(ni,nj)))continue;const [nx,ny]=mid(ni,nj);c.moveTo(x,y);c.lineTo(nx,ny);joined=true;}
+   if(!joined&&!road(i-1,j)&&!road(i,j-1)){c.moveTo(x,y);c.lineTo(x+.01,y);}
+  }
+  c.stroke();
+ }
+}
+function mapHeader(c,size,label){
+ c.font='600 10.5px system-ui,-apple-system,sans-serif';c.textBaseline='middle';c.fillStyle='rgba(243,240,226,.88)';
+ c.textAlign='left';c.fillText(label,8,MAP_HEAD/2+1);
+ // North is always up: a small pointer and N at the right of the strip.
+ const x=size-9;c.textAlign='right';c.fillText('N',x,MAP_HEAD/2+1);c.beginPath();c.moveTo(x-12,MAP_HEAD/2-3);c.lineTo(x-9,MAP_HEAD/2+4);c.lineTo(x-15,MAP_HEAD/2+4);c.closePath();c.fill();
 }
 function drawArrow(c,cx,cy,unit){
  c.save();c.translate(cx,cy);c.rotate(-player.yaw);c.beginPath();c.moveTo(0,-unit*.78);c.lineTo(unit*.58,unit*.52);c.lineTo(0,unit*.22);c.lineTo(-unit*.58,unit*.52);c.closePath();
- c.fillStyle='#f6b26b';c.fill();c.lineWidth=Math.max(1,unit*.18);c.strokeStyle='#263a34';c.stroke();c.restore();
+ c.fillStyle='#f6b26b';c.fill();c.lineWidth=Math.max(1,unit*.16);c.lineJoin='round';c.strokeStyle='#263a34';c.stroke();c.restore();
 }
-function drawDistrict(c,size){
- const [ai,aj]=areaOf(walker.i,walker.j),[i0,j0]=areaStart(ai,aj),pad=size*.06,unit=(size-pad*2)/AREA_SIZE,X=i=>pad+(i-i0)*unit,Y=j=>pad+(j-j0)*unit;
+function drawDistrict({c,size,ratio,ox,oy,box}){
+ const [ai,aj]=areaOf(walker.i,walker.j),[i0,j0]=areaStart(ai,aj),unit=box/AREA_SIZE,snap=v=>Math.round(v*ratio)/ratio,X=i=>snap(ox+(i-i0)*unit),Y=j=>snap(oy+(j-j0)*unit);
  for(let j=j0;j<j0+AREA_SIZE;j++)for(let i=i0;i<i0+AREA_SIZE;i++){
-  if(!districtGround(i,j))continue;const k=i+','+j,seen=walker.visited.has(k),road=roadCells.has(k);
-  c.fillStyle=seen?(road?'#ecdcb0':'#d3e0cf'):(road?'rgba(232,214,168,.5)':'rgba(201,216,198,.3)');
-  c.fillRect(X(i)+.4,Y(j)+.4,unit-.8,unit-.8);
+  if(!districtGround(i,j))continue;c.fillStyle=walker.visited.has(i+','+j)?'rgba(211,224,207,.9)':'rgba(201,216,198,.22)';
+  c.fillRect(X(i),Y(j),X(i+1)-X(i),Y(j+1)-Y(j));
  }
- c.lineCap='round';c.strokeStyle='#f3efe0';c.lineWidth=Math.max(1,unit*.28);c.beginPath();
+ drawRoads(c,i0,j0,AREA_SIZE,X,Y,unit,Math.max(1.6,unit*.5));
+ c.lineCap='round';c.strokeStyle='#a7c79a';c.lineWidth=Math.max(1.4,unit*.32);c.beginPath();
  const side=(i,j,ni,nj)=>{const x=ni>i?X(i+1):ni<i?X(i):null,y=nj>j?Y(j+1):nj<j?Y(j):null;if(x!==null){c.moveTo(x,Y(j));c.lineTo(x,Y(j+1));}else{c.moveTo(X(i),y);c.lineTo(X(i+1),y);}};
- // The district's own border (gates left open), and maze walls inside it.
- for(let t=0;t<AREA_SIZE;t++)for(const [i,j,ni,nj] of [[i0+t,j0,i0+t,j0-1],[i0+t,j0+AREA_SIZE-1,i0+t,j0+AREA_SIZE],[i0,j0+t,i0-1,j0+t],[i0+AREA_SIZE-1,j0+t,i0+AREA_SIZE,j0+t]]){
-  if(!districtGround(i,j)||!districtGround(ni,nj)||watariCell(i,j)||watariCell(ni,nj)||areaGates.has(edgeKey(i,j,ni,nj)))continue;side(i,j,ni,nj);
- }
+ // The district's own hedged border (gates left open), and maze walls inside it.
+ const rim=[];for(let t=0;t<AREA_SIZE;t++)rim.push([i0+t,j0,i0+t,j0-1],[i0+t,j0+AREA_SIZE-1,i0+t,j0+AREA_SIZE],[i0,j0+t,i0-1,j0+t],[i0+AREA_SIZE-1,j0+t,i0+AREA_SIZE,j0+t]);
+ for(const [i,j,ni,nj] of rim){if(!districtGround(i,j)||!districtGround(ni,nj)||watariCell(i,j)||watariCell(ni,nj)||areaGates.has(edgeKey(i,j,ni,nj)))continue;side(i,j,ni,nj);}
  for(const e of mazeWalls){const [a,b]=e.split('>'),[i,j]=a.split(',').map(Number),[ni,nj]=b.split(',').map(Number);if((i<ni||j<nj)&&areaKey(i,j)===areaKey(walker.i,walker.j)&&(walker.visited.has(i+','+j)||walker.visited.has(ni+','+nj)))side(i,j,ni,nj);}
  c.stroke();
  // Gates, as small bright marks on the border.
  c.fillStyle='#f6b26b';
- for(let t=0;t<AREA_SIZE;t++)for(const [i,j,ni,nj] of [[i0+t,j0,i0+t,j0-1],[i0+t,j0+AREA_SIZE-1,i0+t,j0+AREA_SIZE],[i0,j0+t,i0-1,j0+t],[i0+AREA_SIZE-1,j0+t,i0+AREA_SIZE,j0+t]]){
-  if(!areaGates.has(edgeKey(i,j,ni,nj)))continue;const x=(X(i)+X(ni))/2+unit/2,y=(Y(j)+Y(nj))/2+unit/2;c.beginPath();c.arc(x,y,Math.max(1.6,unit*.34),0,Math.PI*2);c.fill();
- }
- drawArrow(c,X(walker.i)+unit/2,Y(walker.j)+unit/2,Math.max(unit*1.15,3.2));
+ for(const [i,j,ni,nj] of rim){if(!areaGates.has(edgeKey(i,j,ni,nj)))continue;const x=(X(i)+X(ni))/2+unit/2,y=(Y(j)+Y(nj))/2+unit/2;c.beginPath();c.arc(x,y,Math.max(1.8,unit*.36),0,Math.PI*2);c.fill();}
+ drawArrow(c,X(walker.i)+unit/2,Y(walker.j)+unit/2,Math.max(unit*1.3,4.6));
  const region=areaRegions.get(ai+','+aj),n=region?.area||areaOrder.indexOf(ai+','+aj)+1;
- c.font='bold 10px sans-serif';c.textBaseline='top';c.fillStyle='#f3f0e2';c.textAlign='left';c.fillText(n>0?'第'+n+'区':'区画外',4,2);c.textAlign='right';c.fillText('N',size-4,2);
+ mapHeader(c,size,n>0?'第'+n+'区':'区画外');
  automap.setAttribute('aria-label','地図（区画全体）：'+(n>0?'第'+n+'区':'区画外')+'、'+HEADING_NAMES[walker.heading]+'を向いています。タップで近くの地図へ。');
 }
 function toggleAutomapMode(){automapMode=automapMode==='area'?'near':'area';automapKey=null;drawAutomap();}
