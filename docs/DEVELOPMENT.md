@@ -8,12 +8,12 @@ Claude Codeの読込入口は [CLAUDE.md](../CLAUDE.md)。GitHub Docs/Issue/PR�
 
 Issueを起票すれば、振り分け→実装→検品→マージまで止まらずに進む段階。D013（マージまでの常設の委任）を全ての採用済みIssue・PRへ広げた運用。安定化へ切り替えると人間が決めるまで、この節が下の「人間がマージする」手順より優先する。規程の正本は `AGENTS.md` の「Autopilot phase」、仕組みは [AUTOPILOT](AUTOPILOT.md)。
 
-- **流れ**：持ち主のアカウントのIssue（GPT・Claudeのチャットや他のAIから）→ 自動の振り分け（ラベルだけ）→ `lane/auto`（low・medium）は自動操縦の実装係が1件ずつ実装してPR → 必須チェック（`rules`・`browser`・`gate`）が緑になったら GitHub の auto-merge が merge commit でマージ。`lane/claude`（high）は、はねさんが Claude Code に直接頼む。
+- **流れ**：持ち主のアカウントのIssue（GPT・Claudeのチャットや他のAIから）→ 1時間ごとの Claude Code の定期タスク「自動操縦の見回り」が振り分け、`lane/auto`（low・medium）を1件ずつ実装してPR → 必須チェック（`rules`・`browser`・`gate`）が緑になったら GitHub の auto-merge が merge commit でマージ。`lane/claude`（high）は、はねさんが Claude Code に直接頼む。
 - **採用済みの扱い**：持ち主のアカウント（GPT・Codex・Claudeの代理を含む）のIssue・PRは採用済み。タイトルが「提案」で始まるもの、本文でこの変更を「未採用」「保留」「マージ保留」と明言しているもの、`hold` / `proposal` ラベル付きは実装・マージしない。
-- **安全装置**：mainのCIが失敗したら、非常停止係が変数 `AUTOPILOT` を off にし、revert PR を出して「main is red」Issue を立てる。止めたいPRには `hold`。
+- **安全装置**：mainのCIが失敗したら、非常停止係が「main is red」Issue（`autopilot-stop` ラベル）を立てる。このラベルのIssueが開いている間、見回りは新しい実装をせず revert PR を出す。閉じれば再開。止めたいPRには `hold`。
 - **人間の確認は夕方の試遊にまとめる**：独立監査・iPhone実機・実耳は未実施として記録し、済んだとは書かない。
-- **引き続き禁止**：mainへ直接push、force-push・履歴の書換え、PRのApprove、AIによるSettings・Secrets・Variables・Rulesetの変更（非常停止係の `AUTOPILOT=off` を除く）、テストの削除・弱体化、repo名・表示名・保存キーの変更、他のリポジトリの操作、配線の修正以外での `.github/workflows` の変更。
-- **毎日の報告**：18時（日本時間）に「自動操縦の日報」Issueへ自動でコメントされる。
+- **引き続き禁止**：mainへ直接push、force-push・履歴の書換え、PRのApprove、AIによるSettings・Secrets・Variables・Rulesetの変更、テストの削除・弱体化、repo名・表示名・保存キーの変更、他のリポジトリの操作、配線の修正以外での `.github/workflows` の変更。
+- **毎日の報告**：18時（日本時間）以降の最初の見回りが「自動操縦の日報」Issueへコメントする。
 - シナリオ・世界観の方向性は `docs/DIRECTION.md`（最初に必要になったPRで作る）にまとめ、はねさんが採用した部分だけを実装する。
 
 ## 作業の始め方
