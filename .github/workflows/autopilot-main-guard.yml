@@ -1,0 +1,27 @@
+name: Autopilot main guard
+# 非常停止係：main のCIが失敗したら「main is red」Issue（autopilot-stop ラベル）を立てる。
+# このIssueが開いている間、定期タスクは新しい実装を止め、revert PR を出す
+on:
+  workflow_run:
+    workflows: [Nagi checks]
+    types: [completed]
+    branches: [main]
+permissions:
+  issues: write
+jobs:
+  guard:
+    if: github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Open the stop issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+          REPO: ${{ github.repository }}
+          RUN: ${{ github.event.workflow_run.html_url }}
+        run: |
+          open=$(gh issue list -R "$REPO" --state open --label autopilot-stop --search "main is red in:title" --json number --jq 'length')
+          [ "$open" = "0" ] || { echo "既に開いている"; exit 0; }
+          gh issue create -R "$REPO" --label autopilot-stop --title "main is red: ${SHA:0:7}" \
+            --body "main のCIが失敗しました（コミット ${SHA}）。このIssueが開いている間、自動操縦は新しい実装を止め、次の見回りでこのコミットを戻す revert PR を出します。直ったらこのIssueを閉じると再開します。失敗したCI：$RUN"

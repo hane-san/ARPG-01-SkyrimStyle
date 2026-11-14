@@ -1,0 +1,31 @@
+name: Autopilot gate
+# 必須チェック gate：提案・保留・許可リスト外・fork のPRはマージさせない
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled, ready_for_review]
+permissions:
+  contents: read
+  pull-requests: read
+jobs:
+  gate:
+    name: gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: Check adoption, holds, author and origin
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+          ALLOW: ${{ vars.AUTOPILOT_ALLOW || 'hane-san,chatgpt-codex-connector[bot],claude[bot]' }}
+        run: |
+          fail() { echo "::error::$1"; exit 1; }
+          [ "$HEAD_REPO" = "${{ github.repository }}" ] || fail "fork からのPRは自動ではマージしない"
+          case ",$ALLOW," in *",$AUTHOR,"*) ;; *) fail "作成者 $AUTHOR は許可リストにない";; esac
+          case ",$LABELS," in *",hold,"*|*",proposal,"*) fail "hold / proposal ラベルが付いている";; esac
+          case "$TITLE" in 提案*) fail "タイトルが「提案」で始まる";; esac
+          # テンプレートの見出し（「保留事項」など）で誤って止めないよう、HTMLコメントを除き、明示の語だけを見る
+          if printf '%s' "$BODY" | perl -0pe 's/<!--.*?-->//gs' | grep -qE '未採用|マージ保留'; then fail "本文に 未採用 / マージ保留 がある"; fi
+          echo "gate: OK"
