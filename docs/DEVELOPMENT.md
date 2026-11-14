@@ -8,12 +8,12 @@ Claude Codeの読込入口は [CLAUDE.md](../CLAUDE.md)。GitHub Docs/Issue/PR�
 
 Issueを起票すれば、振り分け→実装→検品→マージまで止まらずに進む段階。D013（マージまでの常設の委任）を全ての採用済みIssue・PRへ広げた運用。安定化へ切り替えると人間が決めるまで、この節が下の「人間がマージする」手順より優先する。規程の正本は `AGENTS.md` の「Autopilot phase」、仕組みは [AUTOPILOT](AUTOPILOT.md)。
 
-- **流れ**：持ち主のアカウントのIssue（GPT・Claudeのチャットや他のAIから）→ 1時間ごとの Claude Code の定期タスク「自動操縦の見回り」が振り分け、`lane/auto`（low・medium）を1件ずつ実装してPR → 必須チェック（`rules`・`browser`・`gate`）が緑になったら GitHub の auto-merge が merge commit でマージ。`lane/claude`（high）は、はねさんが Claude Code に直接頼む。
+- **流れ**：持ち主のアカウントのIssue（GPT・Claudeのチャットや他のAIから）→ 1日2回（4時台・13時台）の Claude Code の定期タスク「自動操縦の見回り」が振り分け、`lane/auto`（low・medium）を1回3件まで順に実装してPR → 必須チェック（`rules`・`browser`・`gate`）が緑になったら GitHub の auto-merge が merge commit でマージ。`lane/claude`（high）は、はねさんが Claude Code に直接頼む。
 - **採用済みの扱い**：持ち主のアカウント（GPT・Codex・Claudeの代理を含む）のIssue・PRは採用済み。タイトルが「提案」で始まるもの、本文でこの変更を「未採用」「保留」「マージ保留」と明言しているもの、`hold` / `proposal` ラベル付きは実装・マージしない。
 - **安全装置**：mainのCIが失敗したら、非常停止係が「main is red」Issue（`autopilot-stop` ラベル）を立てる。このラベルのIssueが開いている間、見回りは新しい実装をせず revert PR を出す。閉じれば再開。止めたいPRには `hold`。
 - **人間の確認は夕方の試遊にまとめる**：独立監査・iPhone実機・実耳は未実施として記録し、済んだとは書かない。
 - **引き続き禁止**：mainへ直接push、force-push・履歴の書換え、PRのApprove、AIによるSettings・Secrets・Variables・Rulesetの変更、テストの削除・弱体化、repo名・表示名・保存キーの変更、他のリポジトリの操作、配線の修正以外での `.github/workflows` の変更。
-- **毎日の報告**：18時（日本時間）以降の最初の見回りが「自動操縦の日報」Issueへコメントする。
+- **毎日の報告**：見回りが何かしたときに「自動操縦の日報」Issueへコメントする。
 - シナリオ・世界観の方向性は `docs/DIRECTION.md`（最初に必要になったPRで作る）にまとめ、はねさんが採用した部分だけを実装する。
 
 ## 作業の始め方
@@ -104,4 +104,4 @@ Linuxの共有ライブラリが不足する環境では、Playwrightの `instal
 
 Codex/GPT等が作ったPRをClaude Codeが受け取るときの手順（競合→CI→差分監査→1件の記録コメント→人間待ち）と、夜間巡回の範囲は `.claude/skills/steward/SKILL.md`。クラウドのセッションでは `.claude/hooks/session-start.sh` がブラウザ検査の依存を用意する。承認・Settings変更はしない。マージは「自動操縦」の規程どおり。
 
-明け方の巡回：毎日4:12（日本時間）に、専用セッション「明け方の監督巡回（独立監査担当）」が5つのリポジトリのPRを、このスキルの手順で見回る（2026-10-20 採用）。2026-11-14からは、マージ済みPRの事後監査とstuckの救出が主な役目（スキルの「明け方の巡回」）。
+明け方の巡回：毎日4:12（日本時間）の専用セッション「明け方の監督巡回」（2026-10-20 採用）は、2026-11-14の自動操縦への移行で「自動操縦の見回り」の4時台の回に統合する。事後監査とstuckの救出は、頼まれたときにスキルの「自動操縦期の監督」で行う。
