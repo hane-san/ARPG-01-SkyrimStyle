@@ -4,6 +4,18 @@
 Claude Codeの読込入口は [CLAUDE.md](../CLAUDE.md)。GitHub Docs/Issue/PRとGit履歴で引き継ぐ。
 ゲーム固有の構造は維持し、未共有のチャット・AIの記憶を推測しない。
 
+## 現在の運用：自動操縦（2026-11-14〜、人間の指示）
+
+Issueを起票すれば、振り分け→実装→検品→マージまで止まらずに進む段階。D013（マージまでの常設の委任）を全ての採用済みIssue・PRへ広げた運用。安定化へ切り替えると人間が決めるまで、この節が下の「人間がマージする」手順より優先する。規程の正本は `AGENTS.md` の「Autopilot phase」、仕組みは [AUTOPILOT](AUTOPILOT.md)。
+
+- **流れ**：持ち主のアカウントのIssue（GPT・Claudeのチャットや他のAIから）→ 自動の振り分け（ラベルだけ）→ `lane/auto`（low・medium）は自動操縦の実装係が1件ずつ実装してPR → 必須チェック（`rules`・`browser`・`gate`）が緑になったら GitHub の auto-merge が merge commit でマージ。`lane/claude`（high）は、はねさんが Claude Code に直接頼む。
+- **採用済みの扱い**：持ち主のアカウント（GPT・Codex・Claudeの代理を含む）のIssue・PRは採用済み。タイトルが「提案」で始まるもの、本文でこの変更を「未採用」「保留」「マージ保留」と明言しているもの、`hold` / `proposal` ラベル付きは実装・マージしない。
+- **安全装置**：mainのCIが失敗したら、非常停止係が変数 `AUTOPILOT` を off にし、revert PR を出して「main is red」Issue を立てる。止めたいPRには `hold`。
+- **人間の確認は夕方の試遊にまとめる**：独立監査・iPhone実機・実耳は未実施として記録し、済んだとは書かない。
+- **引き続き禁止**：mainへ直接push、force-push・履歴の書換え、PRのApprove、AIによるSettings・Secrets・Variables・Rulesetの変更（非常停止係の `AUTOPILOT=off` を除く）、テストの削除・弱体化、repo名・表示名・保存キーの変更、他のリポジトリの操作、配線の修正以外での `.github/workflows` の変更。
+- **毎日の報告**：18時（日本時間）に「自動操縦の日報」Issueへ自動でコメントされる。
+- シナリオ・世界観の方向性は `docs/DIRECTION.md`（最初に必要になったPRで作る）にまとめ、はねさんが採用した部分だけを実装する。
+
 ## 作業の始め方
 
 1. `git status --short` と `git log -5 --oneline` で現在地と未コミット変更を確認。
@@ -19,7 +31,7 @@ Claude Codeの読込入口は [CLAUDE.md](../CLAUDE.md)。GitHub Docs/Issue/PR�
 4. **PR**：対応Issue、実際の担当・環境、差分、受入条件ごとの結果、検証したSHA、入力・保存・公開への影響、未実行理由、試遊項目を記載。`git push -u origin <work-branch>` で専用ブランチだけを送る。
 5. **CIと監査**：Actionsとリスクに応じた独立監査を確認。修正は作業ブランチへ戻し、関連検証を再実行する。自己確認は独立監査として数えない。
 6. **人間の試遊・承認**：はねさんが面白さと仕様の採否、main統合を判断。文書だけならゲーム試遊を省く理由と文書の確認結果を残せる。
-7. **mainへ統合・公開**：人間の承認後にPRをマージ。main直接push、force-push、自動マージを行わない。mainが進んだら差分を確認して統合・再検証し、他者の変更を上書きしない。公開後のPagesと主要操作を確認する。
+7. **mainへ統合・公開**：必須チェックの合格で auto-merge がマージ（上の「自動操縦」）。main直接push、force-pushを行わない。mainが進んだら差分を確認して統合・再検証し、他者の変更を上書きしない。公開後のPagesと主要操作を確認する。
 
 | リスク | 例 | 監査の扱い |
 |---|---|---|
@@ -81,15 +93,15 @@ Linuxの共有ライブラリが不足する環境では、Playwrightの `instal
 ## 導入後に人間が行う管理画面設定
 
 - **Settings → Actions**：`Nagi checks` を有効にし、PRで `rules` / `browser` が実際に成功することを確認。権限は `contents: read`。
-- **Settings → Rules → Rulesets**：main対象でActive、PR必須、force push禁止、削除制限、必須チェックを設定。成功したPRに表示される正確な `rules` / `browser` のチェック名を選ぶ。個人開発で取得できない他者承認数を必須にしない。利用プランと適用状態を確認し、失敗CIのPRがマージを制限されることを確認する。
+- **Settings → Rules → Rulesets**：（自動操縦期の最新手順は [AUTOPILOT](AUTOPILOT.md) の7節。必須チェックは `rules` / `browser` / `gate`、Require branches to be up to date はオフ）main対象でActive、PR必須、force push禁止、削除制限、必須チェックを設定。成功したPRに表示される正確な `rules` / `browser` のチェック名を選ぶ。個人開発で取得できない他者承認数を必須にしない。利用プランと適用状態を確認し、失敗CIのPRがマージを制限されることを確認する。
 - **Settings → Pages**：現行main / rootと `https://hane-san.github.io/ARPG-01-SkyrimStyle/` を維持し、マージ後の公開を確認。旧 `/ARPG/` と `/Koitototsukuru/` は404。追加の改名・表示名の移行は別工程。
 - **Codex / Claude Code**：実repo、Node/Python/ブラウザ、実モデルと権限を確認。初回は手動でIssue→PRの受渡しを試す。
-- **夜間Routineを導入する場合**：最初は1repoの未処理PR。権限・モデル・対象SHA・スケジュールを確認し、結果をPRへ残す。main直接push・自動マージを許可しない。
+- **夜間Routineを導入する場合**：最初は1repoの未処理PR。権限・モデル・対象SHA・スケジュールを確認し、結果をPRへ残す。main直接pushを許可しない。マージは「自動操縦」の規程どおり。
 
 文書・PRの作成だけで、保護設定やRoutineが有効になったとは扱わない。
 
 ## Claude Codeによる監督・夜間巡回
 
-Codex/GPT等が作ったPRをClaude Codeが受け取るときの手順（競合→CI→差分監査→1件の記録コメント→人間待ち）と、夜間巡回の範囲は `.claude/skills/steward/SKILL.md`。クラウドのセッションでは `.claude/hooks/session-start.sh` がブラウザ検査の依存を用意する。マージ・承認・Settings変更はしない。
+Codex/GPT等が作ったPRをClaude Codeが受け取るときの手順（競合→CI→差分監査→1件の記録コメント→人間待ち）と、夜間巡回の範囲は `.claude/skills/steward/SKILL.md`。クラウドのセッションでは `.claude/hooks/session-start.sh` がブラウザ検査の依存を用意する。承認・Settings変更はしない。マージは「自動操縦」の規程どおり。
 
-明け方の巡回：毎日4:12（日本時間）に、専用セッション「明け方の監督巡回（独立監査担当）」が5つのリポジトリのPRを、このスキルの手順で見回る（2026-10-20 採用）。
+明け方の巡回：毎日4:12（日本時間）に、専用セッション「明け方の監督巡回（独立監査担当）」が5つのリポジトリのPRを、このスキルの手順で見回る（2026-10-20 採用）。2026-11-14からは、マージ済みPRの事後監査とstuckの救出が主な役目（スキルの「明け方の巡回」）。

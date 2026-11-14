@@ -1,0 +1,67 @@
+name: Autopilot dispatch
+# 配車係：進行中が0件なら、lane/auto の最古の1件を実装係に渡す
+on:
+  workflow_run:
+    workflows: [Autopilot triage]
+    types: [completed]
+  pull_request:
+    types: [closed]
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: autopilot-dispatch
+  cancel-in-progress: false
+jobs:
+  pick:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      issue: ${{ steps.pick.outputs.issue }}
+      executor: ${{ steps.pick.outputs.executor }}
+    steps:
+      - name: Pick the next issue
+        id: pick
+        env:
+          GH_TOKEN: ${{ secrets.AUTOPILOT_PAT }}
+          AUTOPILOT: ${{ vars.AUTOPILOT }}
+          EXECUTOR: ${{ vars.AUTOPILOT_EXECUTOR || 'claude' }}
+          REPO: ${{ github.repository }}
+        run: |
+          [ "$AUTOPILOT" = "on" ] || { echo "AUTOPILOT=off"; exit 0; }
+          [ -n "$GH_TOKEN" ] || { echo "::warning::AUTOPILOT_PAT が未設定"; exit 0; }
+          busy=$(gh issue list -R "$REPO" --state open --label in-progress --json number --jq 'length')
+          [ "$busy" = "0" ] || { echo "進行中 $busy 件"; exit 0; }
+          n=$(gh issue list -R "$REPO" --state open --label lane/auto --limit 200 \
+                --json number,labels --jq '[.[] | select([.labels[].name] | index("hold") | not) | .number] | sort | first // empty')
+          [ -n "$n" ] || { echo "待ちのIssueなし"; exit 0; }
+          gh issue edit "$n" -R "$REPO" --add-label in-progress
+          echo "issue=$n" >> "$GITHUB_OUTPUT"
+          echo "executor=$EXECUTOR" >> "$GITHUB_OUTPUT"
+  codex:
+    needs: pick
+    if: needs.pick.outputs.issue != '' && needs.pick.outputs.executor == 'codex'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Ask Codex
+        env:
+          GH_TOKEN: ${{ secrets.AUTOPILOT_PAT }}
+        run: |
+          gh issue comment "${{ needs.pick.outputs.issue }}" -R "${{ github.repository }}" \
+            --body "@codex implement this. Follow AGENTS.md. Open a ready (non-draft) PR whose body contains Closes #${{ needs.pick.outputs.issue }}."
+  claude:
+    needs: pick
+    if: needs.pick.outputs.issue != '' && needs.pick.outputs.executor == 'claude'
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+    uses: ./.github/workflows/autopilot-claude.yml
+    with:
+      mode: implement
+      number: ${{ needs.pick.outputs.issue }}
+    secrets: inherit

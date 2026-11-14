@@ -10,5 +10,5 @@ repository, approved GitHub documentation and issue as the source of truth; neve
 assume another assistant's private memory or unseen chat history.
 Use the actual available model in Claude Code; this file does not select one.
 For implementation follow the issue scope; for review use the PR diff and
-independent evidence. Never push directly to main, force-push or enable auto-merge.
-Leave main integration to the human producer after CI and playtest approval.
+independent evidence.
+Follow the autopilot phase in AGENTS.md (human instruction 2026-11-14): adopted PRs merge through the required checks `rules`, `browser` and `gate` and GitHub auto-merge, and the daily 15:00 run is retired. Never push directly to main or force-push. For a large change the human asks for directly, write a short technical design in the PR body first, then leave merging to auto-merge. Record unverified checks; how the parts work is in `docs/AUTOPILOT.md`.

@@ -1,0 +1,41 @@
+name: Autopilot main guard
+# 非常停止係：main のCIが失敗したら AUTOPILOT を off にし、最後のマージを revert するPRを出す
+on:
+  workflow_run:
+    workflows: [Nagi checks]
+    types: [completed]
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  guard:
+    if: github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 20
+          token: ${{ secrets.AUTOPILOT_PAT }}
+      - name: Stop the autopilot and revert
+        env:
+          GH_TOKEN: ${{ secrets.AUTOPILOT_PAT }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+          REPO: ${{ github.repository }}
+          RUN: ${{ github.event.workflow_run.html_url }}
+        run: |
+          gh variable set AUTOPILOT -R "$REPO" --body off || echo "::warning::AUTOPILOT を off にできなかった（PATの Variables 権限を確認）"
+          subject=$(git log -1 --format=%s "$SHA")
+          case "$subject" in Revert*) echo "revert 自体の失敗は自動で戻さない";
+            gh issue create -R "$REPO" --title "main is red（revert後も失敗）" --body "revert のコミット ${SHA} でも main のCIが失敗しました。人の確認が必要です。$RUN"; exit 0;; esac
+          git config user.name "autopilot"; git config user.email "autopilot@users.noreply.github.com"
+          branch="revert/${SHA:0:7}"
+          git switch -c "$branch"
+          if [ "$(git log -1 --format=%P "$SHA" | wc -w)" -gt 1 ]; then git revert --no-edit -m 1 "$SHA"; else git revert --no-edit "$SHA"; fi
+          git push origin "$branch"
+          url=$(gh pr create -R "$REPO" --head "$branch" --base main --label revert \
+                --title "Revert: ${subject}" --body "main のCIが失敗したため、自動で ${SHA} を戻します。失敗したCI：$RUN")
+          gh pr merge "$url" --auto --merge || true
+          gh issue create -R "$REPO" --title "main is red: ${SHA:0:7}" \
+            --body "main のCIが失敗したので、自動操縦を止めて（AUTOPILOT=off）revert PR を出しました。$url  失敗したCI：$RUN  直ったら変数 AUTOPILOT を on に戻してください。"

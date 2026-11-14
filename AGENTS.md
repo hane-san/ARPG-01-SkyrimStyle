@@ -7,15 +7,25 @@ Read [docs/DESIGN.md](docs/DESIGN.md), [docs/DECISIONS.md](docs/DECISIONS.md) (d
 
 ## 2. Current phase and development contract
 
-### Producer's standing merge delegation (2026-11-05, D013)
+### Autopilot phase (human instruction 2026-11-14)
 
-The human producer delegated **normal PR merging for this game's requests** to the AI working the request: "今後の指示ふくめこのゲームに対してはマージまで一貫でやっちゃって". For requests from the producer, work branch → PR → exact-head `rules`/`browser` success → normal merge commit → confirm main Actions and Pages. Still prohibited: direct push to main, force-push, GitHub auto-merge, PR approvals, Settings changes, deleting or weakening tests. Independent audit and iPhone playtests remain unverified unless actually performed; record them so.
+This replaces the producer's standing merge delegation of 2026-11-05 (D013), which it extends to every adopted Issue and PR. Until the human declares a stabilization phase, this section overrides the merge wording elsewhere in this file, in `CLAUDE.md`, in `docs/DEVELOPMENT.md` and in the steward skill. How the parts work: [docs/AUTOPILOT.md](docs/AUTOPILOT.md).
+
+- **Flow**: Issues from the owner account (filed from GPT/Claude chats or other AIs) are triaged automatically (labels only). `lane/auto` (low/medium risk) is implemented one at a time per repository by the autopilot worker, which opens a ready PR containing `Closes #n`. `lane/claude` (high risk) is implemented when the human asks Claude Code directly. Every adopted PR merges through GitHub auto-merge.
+- **Adopted work** = Issues and PRs created by the owner account (including GPT/Codex/Claude acting for the owner), unless the title starts with 「提案」, the body states that the change is 未採用/保留/マージ保留, or it carries a `hold`/`proposal` label. Proposals are never implemented on their own initiative.
+- **Merge condition**: the required checks `rules`, `browser` and `gate` succeed on the head commit and the PR does not conflict with `main`. **GitHub's auto-merge feature is allowed** and is the normal way PRs merge (merge commit). No human approval, pre-merge audit or time window is required. A session may also merge a passing adopted PR itself with a normal merge commit.
+- **Safety**: if `main` CI fails, the main guard sets the repository variable `AUTOPILOT=off`, opens an auto-merging revert PR and files a "main is red" Issue. `AUTOPILOT=off` stops dispatch, patrol and auto-merge arming. Anything that must not merge gets `hold`.
+- Human playtests, independent audit, physical iPhone and ear listening are batched to the evening play session. Record them as unverified; never call them done.
+- Still prohibited: direct push to `main`, force-push or history rewrite, PR approvals, AI changes to repository Settings/Secrets/Variables/Rulesets (except the main guard switching `AUTOPILOT` off), deleting or weakening tests, renaming the repository/display title/storage keys, touching other repositories, and changing `.github/workflows` except in a session the human starts to fix the autopilot wiring. Game invariants stay binding; a change that breaks them needs an explicit Issue from the human.
+- **Large changes asked of Claude Code directly**: write a short technical design in the PR body first, then implement; leave merging to auto-merge and note the result in the 「自動操縦の日報」 Issue.
+- **Supervision after merge** (when the human asks, and in the dawn patrol): audit merged PRs against the invariants, open a fix Issue or revert PR when needed, rescue `stuck` items and reconcile contradictory directions (the newest human statement wins). Procedure: `.claude/skills/steward/SKILL.md`.
+- **Scenario and direction documents**: story/world direction lives in `docs/DIRECTION.md` (created by the first PR that needs it). Direction PRs may be docs-only; only the parts the human adopted are implemented. Unadopted brainstorms stay marked 「提案」.
 
 ### Shared AI development contract
 
-- The human producer decides game specifications, playtest acceptance and integration into main. Distinguish approved, proposed, deferred, superseded and unverified items. Do not invent missing chat context; surface contradictions between approved specs, code and tests.
+- The human producer decides game specifications and playtest acceptance; integration into main follows the autopilot phase above. Distinguish approved, proposed, deferred, superseded and unverified items. Do not invent missing chat context; surface contradictions between approved specs, code and tests.
 - Handoff: human adoption in Chat -> Issue with acceptance criteria -> Codex or Claude Code/Sonnet work branch -> PR -> CI -> risk-based independent audit -> human playtest/approval -> main. Choose the implementation line by availability and context; model names are roles, not fixed API dependencies.
-- Never push directly to main, force-push or enable auto-merge. Fetch current main, inspect open PRs and coordinate overlapping files; preserve other contributors' work.
+- Never push directly to main or force-push; merging follows the autopilot phase above. Fetch current main, inspect open PRs and coordinate overlapping files; preserve other contributors' work.
 - Record risk and evidence in the PR. Low-risk wording/docs changes may omit independent audit; medium-risk changes need an independent review of affected behavior; high-risk terrain/input/save/state changes need prior technical design and deeper independent audit (Opus when available). Self-review is not independent audit. See DEVELOPMENT for routing and unavailable-review handling.
 - PASS/WARN/BLOCK are audit report terms only. GitHub required status checks are actual Actions jobs selected in Settings; an AI PASS never satisfies CI or grants merge authority.
 - Preserve existing mobile input, deployment paths and the game-specific invariants below. Record executed checks, unverified work and human playtest steps; never claim iPhone hardware evidence from browser emulation.
