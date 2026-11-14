@@ -8,7 +8,7 @@ Claude Codeの読込入口は [CLAUDE.md](../CLAUDE.md)。GitHub Docs/Issue/PR�
 
 Issueを起票すれば、振り分け→実装→検品→マージまで止まらずに進む段階。D013（マージまでの常設の委任）を全ての採用済みIssue・PRへ広げた運用。安定化へ切り替えると人間が決めるまで、この節が下の「人間がマージする」手順より優先する。規程の正本は `AGENTS.md` の「Autopilot phase」、仕組みは [AUTOPILOT](AUTOPILOT.md)。
 
-- **流れ**：持ち主のアカウントのIssue（GPT・Claudeのチャットや他のAIから）→ 1日2回（4時台・13時台）の Claude Code の定期タスク「自動操縦の見回り」が振り分け、`lane/auto`（low・medium）を1回3件まで順に実装してPR → 必須チェック（`rules`・`browser`・`gate`）が緑になったら GitHub の auto-merge が merge commit でマージ。`lane/claude`（high）は、はねさんが Claude Code に直接頼む。
+- **流れ**：持ち主のアカウントのIssue（GPT・Claudeのチャットや他のAIから）→ 毎日明け方（4時台）の Claude Code の定期タスク「自動操縦の見回り」が振り分け、`lane/auto`（low・medium）を1回3件まで順に実装してPR → 必須チェック（`rules`・`browser`・`gate`）が緑になったら GitHub の auto-merge が merge commit でマージ。`lane/claude`（high）は、はねさんが Claude Code に直接頼む。
 - **採用済みの扱い**：持ち主のアカウント（GPT・Codex・Claudeの代理を含む）のIssue・PRは採用済み。タイトルが「提案」で始まるもの、本文でこの変更を「未採用」「保留」「マージ保留」と明言しているもの、`hold` / `proposal` ラベル付きは実装・マージしない。
 - **安全装置**：mainのCIが失敗したら、非常停止係が「main is red」Issue（`autopilot-stop` ラベル）を立てる。このラベルのIssueが開いている間、見回りは新しい実装をせず revert PR を出す。閉じれば再開。止めたいPRには `hold`。
 - **人間の確認は夕方の試遊にまとめる**：独立監査・iPhone実機・実耳は未実施として記録し、済んだとは書かない。
@@ -104,4 +104,4 @@ Linuxの共有ライブラリが不足する環境では、Playwrightの `instal
 
 Codex/GPT等が作ったPRをClaude Codeが受け取るときの手順（競合→CI→差分監査→1件の記録コメント→人間待ち）と、夜間巡回の範囲は `.claude/skills/steward/SKILL.md`。クラウドのセッションでは `.claude/hooks/session-start.sh` がブラウザ検査の依存を用意する。承認・Settings変更はしない。マージは「自動操縦」の規程どおり。
 
-明け方の巡回：毎日4:12（日本時間）の専用セッション「明け方の監督巡回」（2026-10-20 採用）は、2026-11-14の自動操縦への移行で「自動操縦の見回り」の4時台の回に統合する。事後監査とstuckの救出は、頼まれたときにスキルの「自動操縦期の監督」で行う。
+明け方の巡回：毎日4:12（日本時間）の専用セッション「明け方の監督巡回」（2026-10-20 採用）は、2026-11-14の自動操縦への移行で「自動操縦の見回り」（4時台）に統合する。事後監査とstuckの救出は、頼まれたときにスキルの「自動操縦期の監督」で行う。
